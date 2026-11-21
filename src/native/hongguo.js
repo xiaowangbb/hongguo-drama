@@ -475,6 +475,7 @@ async function fetchEpisodeList(seriesId, options = {}) {
   if (String(seriesId).startsWith('custom:')) return require('./custom-source').fetchEpisodeList(seriesId);
   if (String(seriesId).startsWith('hema:')) return require('./hema').fetchEpisodeList(seriesId);
   if (String(seriesId).startsWith('xifan:')) return require('./xifan').fetchEpisodeList(seriesId);
+  if (String(seriesId).startsWith('module:')) return require('./module-source').fetchEpisodeList(seriesId, options);
   return cachedRequest(`episodes:${seriesId}`, 60000,
     () => fetchEpisodeListFresh(seriesId, { deadline: Number(options.deadline) || 0 }),
     { force: options.force === true });
@@ -673,6 +674,7 @@ async function fetchPlayUrlSingle(vid, sid, options = {}) {
     if (String(vid).startsWith('custom:') || String(sid).startsWith('custom:')) return require('./custom-source').fetchPlayUrlSingle(vid, sid, options);
     if (String(vid).startsWith('hema:') || String(sid).startsWith('hema:')) return require('./hema').fetchPlayUrlSingle(vid, sid);
     if (String(vid).startsWith('xifan:') || String(sid).startsWith('xifan:')) return require('./xifan').fetchPlayUrlSingle(vid, sid);
+    if (String(vid).startsWith('module:') || String(sid).startsWith('module:')) return require('./module-source').fetchPlayUrlSingle(vid, sid, options);
     const skipWeb = (failedWebMedia.get(String(vid)) || 0) > Date.now();
     const allowLowerQuality = options.allowLowerQuality === true && quality !== 'auto';
     const cacheKey = `play:${sid || ''}:${vid}${quality === 'auto' ? '' : `:${quality}`}${skipWeb ? ':fallback' : ''}${allowLowerQuality ? ':lower-quality' : ''}`;

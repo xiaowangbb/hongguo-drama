@@ -119,6 +119,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testCustomSource: draft => ipcRenderer.invoke('test-custom-source',draft),
   getMediaSources: () => ipcRenderer.invoke('get-media-sources'),
   setBuiltinSourceEnabled: (id, enabled) => ipcRenderer.invoke('set-builtin-source-enabled', id, enabled),
+  getModuleSources: () => ipcRenderer.invoke('get-module-sources'),
+  setModuleSourceEnabled: (id, enabled) => ipcRenderer.invoke('set-module-source-enabled', id, enabled),
   onMediaSourcesChanged: cb => {
     const listener = () => cb();
     ipcRenderer.on('media-sources-changed', listener);
@@ -135,6 +137,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 播放器
   getSeriesEpisodes: (seriesId) => ipcRenderer.invoke('get-series-episodes', seriesId),
+  // 只读缓存的批量进度（卡片/选择面板角标），不扫盘，避免网络盘上主进程长时间阻塞
+  getSeriesProgress: () => ipcRenderer.invoke('get-series-progress'),
+  // 逐部预热进度（主进程一次只扫一部，界面保持可响应）
+  warmSeriesProgress: (seriesId) => ipcRenderer.invoke('warm-series-progress', seriesId),
   downloadSingleEpisode: (seriesId, vidIndex, quality) =>
     ipcRenderer.invoke('download-single-episode', seriesId, vidIndex, quality),
   downloadFollowingEpisodes: (seriesId, vidIndex, quality) =>

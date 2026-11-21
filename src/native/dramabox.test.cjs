@@ -96,6 +96,7 @@ test('DramaBox registry, source labels and desktop permission routes retain thei
   assert.match(model.mediaSourceLabel(sid), /DramaBox/);
   const main = fs.readFileSync(path.join(__dirname, '../../main.js'), 'utf8');
   const context = vm.createContext({ getCurrentSettings: () => ({}), normalizeDownloadQuality: () => 'auto',
+    ...require('./source-identity'),
     hongguo: { fetchEpisodeList: async () => ({ episodes: [{ vid, vid_index: 1, locked: true }] }) } });
   const start = main.indexOf('async function enqueueEpisodes(');
   vm.runInContext(main.slice(start, main.indexOf('\n}', start) + 2), context);

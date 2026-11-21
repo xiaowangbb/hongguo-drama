@@ -33,6 +33,8 @@ test('IPC persists source changes, notifies every window, and blocks disabled se
     const context = {
       require: name => { assert.equal(name, './src/native/media-sources'); return { getMediaSources, setBuiltinSourceEnabled }; },
       store, mainWindow: null, getCurrentSettings: () => store.getSettings(),
+      // 第三方脚本来源单独开关，本用例只验证内置来源，不提供任何已开启的脚本来源。
+      moduleSources: { isModuleSource: () => false, listSources: () => [], setEnabled: () => {} },
       seriesSearch: { searchSeries: (keyword, load) => load(keyword) },
       BrowserWindow: { getAllWindows: () => [1, 2].map(id => ({ webContents: { isDestroyed: () => false, send: event => events.push([id, event]) } })) },
       ipcMain: { handle: (name, fn) => handlers[name] = fn }, console,

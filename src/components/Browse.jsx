@@ -137,8 +137,19 @@ function Browse({ onNavigate, active = true }) {
     toastTimer.current = setTimeout(() => setToast(null), 3000);
   }, []);
 
+  const knownSeries = useRef(new Set());
   const loadDownloadedMap = useCallback(async () => {
     try {
+      // 一次拿全量进度（主进程只读缓存）。逐个 await getSeriesEpisodes 会在网络盘上
+      // 逐部同步扫目录，主进程被堵住后整窗转彩虹圈。
+      if (window.electronAPI.getSeriesProgress) {
+        const res = await window.electronAPI.getSeriesProgress();
+        if (res && res.success && res.progress) {
+          knownSeries.current = new Set(Object.keys(res.progress));
+          setDownloadedMap(res.progress);
+          return;
+        }
+      }
       const list = (await window.electronAPI.getSeriesList()) || [];
       const map = {};
       for (const s of list) {
@@ -152,6 +163,29 @@ function Browse({ onNavigate, active = true }) {
       }
       setDownloadedMap(map);
     } catch (_) {}
+  }, []);
+
+  // 角标按需预热：只为当前这一页的短剧逐部读取目录（主进程一次扫一部），
+  // 既不会一进来就扫完全部档案，也不会把主进程长时间占住。
+  // 换页时列表会变，已预热过的用 done 去重，新出现的继续补，不需要中断上一次循环。
+  const warmState = useRef({ done: new Set() });
+  const warmProgress = useCallback(async (items) => {
+    const warm = window.electronAPI.warmSeriesProgress;
+    if (typeof warm !== 'function' || !Array.isArray(items) || items.length === 0) return;
+    const state = warmState.current;
+    for (const item of items) {
+      const sid = String(item?.series_id || '');
+      if (!sid || state.done.has(sid)) continue;
+      // 只有档案里存在的剧才有下载记录，目录里没登记的直接跳过，省掉无谓的 IPC。
+      if (knownSeries.current.size && !knownSeries.current.has(sid)) continue;
+      state.done.add(sid);
+      try {
+        const res = await warm(sid);
+        if (res && res.success && res.progress) {
+          setDownloadedMap((prev) => ({ ...prev, [res.seriesId]: res.progress }));
+        }
+      } catch (_) { /* 角标失败不影响浏览 */ }
+    }
   }, []);
 
   const loadCategories = useCallback(async () => {
@@ -291,7 +325,10 @@ function Browse({ onNavigate, active = true }) {
     loadCategories();
   }, [loadCategories]);
 
-  useEffect(() => { if (active) loadDownloadedMap(); }, [active, loadDownloadedMap]);
+  useEffect(() => { if (active) { warmState.current.done.clear(); loadDownloadedMap(); } }, [active, loadDownloadedMap]);
+
+  // 拿到新片单后，只为这一页出现过的短剧预热角标（逐部、可中断）。
+  useEffect(() => { if (active && results.length) warmProgress(results); }, [active, results, warmProgress]);
 
   useEffect(() => {
     invalidateList(); closeDetail(); pageCache.clear(); discoveryPages.clear();
@@ -560,7 +597,7 @@ function Browse({ onNavigate, active = true }) {
           <div><h2>{t("发现短剧")}</h2><p className="page-description">{t("挑一部喜欢的，让故事继续。")}</p></div>
         </div>
         <div className="browse-header-right">
-          {(!mobile || mediaSources.length > 1) && <label className="source-control">{t("来源")}<select className="input-field" aria-label={t("短剧来源")} value={source} onChange={(e) => switchSource(e.target.value)}>{mediaSources.map(({ id, label }) => <option key={id} value={id}>{id.startsWith('custom:') ? label : t(label)}</option>)}</select></label>}
+          {(!mobile || mediaSources.length > 1) && <label className="source-control">{t("来源")}<select className="input-field" aria-label={t("短剧来源")} value={source} onChange={(e) => switchSource(e.target.value)}>{mediaSources.map(({ id, label }) => <option key={id} value={id}>{(id.startsWith('custom:') || id.startsWith('module:')) ? label : t(label)}</option>)}</select></label>}
           {source === 'hongguo' && <label className="source-control">{t(mobile ? '' : '目录线路')}<select className="input-field" aria-label={t("红果目录线路")} value={catalogChannel} onChange={(e) => switchCatalogChannel(e.target.value)}><option value="app">{t(mobile ? 'App目录' : 'App（快速 · 部分片单）')}</option><option value="web">{t(mobile ? '官网目录' : '官网（完整目录）')}</option></select></label>}
           {!mobile && <button className="btn btn-primary" onClick={() => onNavigate('download')}><Search size={15} />{t("搜索短剧")}</button>}
           <button className="btn btn-outline" disabled={loading || sourcesLoading || meta.cursorExpired || page !== displayedPage || !hasNextBatch} onClick={() => gotoPage(displayedPage + 1)}><RefreshCw size={15} />{t("换一批")}</button>

@@ -674,6 +674,33 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
     let cancelled = false;
     (async () => {
       const map = {};
+      // 优先走一次批量接口：逐个查询会逐部扫描下载目录，网络盘上等于把主进程冻住。
+      if (window.electronAPI.getSeriesProgress) {
+        try {
+          const res = await window.electronAPI.getSeriesProgress();
+          if (res && res.success && res.progress) {
+            if (cancelled) return;
+            setDownloadedMap(res.progress);
+            // 未预热的剧逐部补齐：主进程每次只扫一部，面板先出来再慢慢填数字。
+            const warm = window.electronAPI.warmSeriesProgress;
+            if (typeof warm === 'function') {
+              const pending = new Set(Array.isArray(res.pending) ? res.pending : []);
+              for (const s of seriesList) {
+                const sid = String(s.series_id);
+                if (pending.size && !pending.has(sid)) continue;
+                try {
+                  const one = await warm(sid);
+                  if (cancelled) return;
+                  if (one && one.success && one.progress) {
+                    setDownloadedMap((prev) => ({ ...prev, [one.seriesId]: one.progress }));
+                  }
+                } catch (_) {}
+              }
+            }
+            return;
+          }
+        } catch (_) {}
+      }
       for (const s of seriesList) {
         try {
           const res = await window.electronAPI.getSeriesEpisodes(s.series_id);

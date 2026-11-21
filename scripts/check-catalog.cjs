@@ -62,6 +62,8 @@ async function checkBrowseBudget() {
   const context = { ipcMain: { handle: (_name, callback) => { handler = callback; } }, proxyStartupFallback: false,
     getCurrentSettings: () => ({}), resolveProxyConfig: () => ({ mode }),
     setTimeout: fn => setTimeout(fn, 0),
+    // 第三方脚本来源在本检查里不参与路由，仅需可判定的空实现。
+    moduleSources: { isModuleSource: () => false, browseList: async () => ({ success: true, results: [] }) },
     require: () => ({ browseList: async options => { calls++; lastOptions = options; return { success: false, error: '目录加载超时，请重试' }; } }) };
   vm.runInNewContext(main.slice(main.indexOf("ipcMain.handle('browse-list'"), main.indexOf('const normalizeSearchTitle')), context);
   assert.equal((await handler({}, { catalogChannel: 'web' })).success, false);

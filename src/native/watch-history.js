@@ -86,6 +86,9 @@ function sourceOf(id) {
   if (/^\d{6,30}$/.test(id)) return 'hongguo';
   if (/^xifan:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+$/.test(id)) return 'xifan';
   if (/^hema:\d+$/.test(id)) return 'hema';
+  // 第三方来源脚本：module:<源>:<剧目>
+  const scripted = /^module:([^:]+):/.exec(String(id));
+  if (scripted) return `module:${scripted[1]}`;
   return null;
 }
 
