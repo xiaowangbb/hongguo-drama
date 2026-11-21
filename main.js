@@ -2202,7 +2202,10 @@ function isNetworkFilesystem(directory) {
   return network;
 }
 
-const IDENTITY_TIMESTAMP_TOLERANCE_NS = 2_000_000_000n;
+// 网络盘上同一个文件的时间戳每次读回来都可能差几百毫秒到几秒（SMB 客户端换算服务器
+// 时间时抖动），实测本机 104 个任务 p50=0.90s、最大 3.59s。5s 容差能全覆盖，同时仍
+// 要求 dev/ino/size 严格相等，替换检测不会因此放松。本地盘维持纳秒精确比较。
+const IDENTITY_TIMESTAMP_TOLERANCE_NS = 5_000_000_000n;
 
 function timestampsNear(a, b) {
   if (!a || !b) return true; // filesystems that omit birthtime must not force a re-read
