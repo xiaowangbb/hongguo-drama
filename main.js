@@ -4653,6 +4653,9 @@ ipcMain.handle('test-proxy', async (event, draft) => {
 });
 
 // ===== IPC：下载管理 =====
+// 一轮全量校验最多连续占用主线程 6ms 就让出一次事件循环。单个任务的检查本身是同步的
+// （网络盘上一次 lstat 就可能 20ms+），按时间切片而不是按任务数切片，才不会出现
+// 「让出了，但每次让出前又堵 20ms」的成串卡顿。
 async function currentDownloadTaskView(verifyFiles = false) {
   const options = {
     xifanTitleConflict: info => episodeDisplayTitle(info.series_id, info.series_title, info.ep_title) !== info.ep_title,
@@ -4664,13 +4667,27 @@ async function currentDownloadTaskView(verifyFiles = false) {
       hasCompleteFile: (task, conflicts) => !conflicts.get(task.savePath)?.has(task),
     });
   }
-  const conflicts = pathConflicts(downloadTasks);
-  const checks = new Map();
-  for (const task of downloadTasks) {
-    if (task.status !== 'completed') continue;
-    await new Promise(resolve => setTimeout(resolve, 0));
-    checks.set(task, !conflicts.get(task.savePath)?.has(task) && hasCompleteTaskFile(task, conflicts));
+  // 校验体保持内联：隔离加载本函数的检查脚本会整段求值，依赖外部变量会直接报未定义。
+  const runVerification = async () => {
+    const conflicts = pathConflicts(downloadTasks);
+    const checks = new Map();
+    let sliceStart = Date.now();
+    for (const task of downloadTasks) {
+      if (task.status !== 'completed') continue;
+      if (Date.now() - sliceStart >= 6) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        sliceStart = Date.now();
+      }
+      checks.set(task, !conflicts.get(task.savePath)?.has(task) && hasCompleteTaskFile(task, conflicts));
+    }
+    return checks;
+  };
+  // 轮询与手动刷新可能同时要求校验：共享同一轮，避免两轮同步 IO 叠在主线程上。
+  if (!currentDownloadTaskView.inFlight) {
+    currentDownloadTaskView.inFlight = runVerification()
+      .finally(() => { currentDownloadTaskView.inFlight = null; });
   }
+  const checks = await currentDownloadTaskView.inFlight;
   return downloadTaskView(downloadTasks, { ...options, hasCompleteFile: task => checks.get(task) === true });
 }
 
