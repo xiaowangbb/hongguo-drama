@@ -2155,14 +2155,78 @@ function fileIdentityMatches(identity, file) {
   } catch (_) { return false; }
 }
 
-// ctime/mtime can change without replacing the file; destructive actions still require the full identity.
-function fileIdentityStillSameObject(identity, file) {
+// Network filesystems (SMB/AFP/NFS) report timestamps at second-level precision or with
+// sub-second drift, so an exact nanosecond comparison never matches and every completed task
+// falls back to re-reading file content. They are also slow enough per stat that repeated
+// verification dominates the UI thread. Local filesystems keep the original strict behaviour.
+const filesystemClassCache = new Map();
+const NETWORK_FILESYSTEM_TYPE = /^(smbfs|afpfs|nfs|cifs|webdav|fuse|osxfuse|sshfs)/i;
+let mountTableCache = { at: 0, entries: [] };
+
+// fs.statfsSync().type is the numeric f_fstype on macOS (SMB = 30, APFS = 26), not a name,
+// so classification comes from the mount table. It is read once a minute and shared.
+function readMountTable() {
+  const now = Date.now();
+  if (mountTableCache.entries.length && now - mountTableCache.at < 60_000) return mountTableCache.entries;
+  const entries = [];
   try {
-    const current = readFileIdentity(file, { content: false });
+    const { execFileSync } = require('child_process');
+    const text = execFileSync('/sbin/mount', { encoding: 'utf8', timeout: 3000 });
+    for (const line of text.split('\n')) {
+      const matched = / on (\/.*?) \(([^,)]+)/.exec(line);
+      if (matched) entries.push({ mountPoint: matched[1], type: matched[2].trim().toLowerCase() });
+    }
+  } catch (_) { /* mount unavailable: fall through with an empty table */ }
+  mountTableCache = { at: now, entries };
+  return entries;
+}
+
+function isNetworkFilesystem(directory) {
+  const cached = filesystemClassCache.get(directory);
+  if (cached !== undefined) return cached;
+  let network = false;
+  try {
+    const target = path.resolve(directory);
+    let best = null;
+    for (const entry of readMountTable()) {
+      const prefix = entry.mountPoint === '/' ? '/' : `${entry.mountPoint}/`;
+      if (target === entry.mountPoint || target.startsWith(prefix)) {
+        if (!best || entry.mountPoint.length > best.mountPoint.length) best = entry;
+      }
+    }
+    if (best) network = NETWORK_FILESYSTEM_TYPE.test(best.type);
+    else network = Number(fs.statfsSync(directory).type) === 30; // 30 = smbfs
+  } catch (_) { network = false; }
+  if (filesystemClassCache.size > 1024) filesystemClassCache.clear();
+  filesystemClassCache.set(directory, network);
+  return network;
+}
+
+const IDENTITY_TIMESTAMP_TOLERANCE_NS = 2_000_000_000n;
+
+function timestampsNear(a, b) {
+  if (!a || !b) return true; // filesystems that omit birthtime must not force a re-read
+  try {
+    const left = BigInt(a);
+    const right = BigInt(b);
+    return (left > right ? left - right : right - left) <= IDENTITY_TIMESTAMP_TOLERANCE_NS;
+  } catch (_) { return false; }
+}
+
+// ctime/mtime can change without replacing the file; destructive actions still require the full identity.
+function fileIdentityStillSameObject(identity, file, preloadedStat = null) {
+  try {
+    const current = readFileIdentity(file, { content: false, preloadedStat });
     if (!sameFileObject(identity, current)) return false;
     if (!identity.contentHash) return true;
-    if (current.mtimeNs === identity.mtimeNs && current.ctimeNs === identity.ctimeNs
-      && current.birthtimeNs === identity.birthtimeNs) return true;
+    // Guarded so isolated vm checks that only load a subset of functions keep the strict path.
+    const loosely = typeof isNetworkFilesystem === 'function' && isNetworkFilesystem(path.dirname(file));
+    const unchanged = loosely
+      ? timestampsNear(current.mtimeNs, identity.mtimeNs) && timestampsNear(current.ctimeNs, identity.ctimeNs)
+        && timestampsNear(current.birthtimeNs, identity.birthtimeNs)
+      : current.mtimeNs === identity.mtimeNs && current.ctimeNs === identity.ctimeNs
+        && current.birthtimeNs === identity.birthtimeNs;
+    if (unchanged) return true;
     return sameFileObject(identity, readFileIdentity(file));
   } catch (_) { return false; }
 }
@@ -2179,7 +2243,23 @@ function legacyFileMatches(task, file) {
   } catch (_) { return false; }
 }
 
+// The same series directory is validated once per completed episode; on a network mount that is
+// two extra realpath round-trips for every file. Cache the verdict only for network shares, where
+// the round-trips are expensive, and keep local filesystems strictly re-validated.
+const DIRECTORY_IDENTITY_TTL_MS = 120_000;
+const directoryIdentityCache = new Map();
+const DIRECTORY_UNAVAILABLE_MESSAGE = '下载目录不可用或挂载已变化，已保留文件和任务记录；请确认原目录后重试';
+
 function validateDirectoryIdentity(identity, file) {
+  const cacheable = typeof isNetworkFilesystem === 'function' && isNetworkFilesystem(identity.directory);
+  const now = Date.now();
+  if (cacheable) {
+    const cached = directoryIdentityCache.get(identity.directory);
+    if (cached && now - cached.at < DIRECTORY_IDENTITY_TTL_MS) {
+      if (!cached.ok) throw new Error(DIRECTORY_UNAVAILABLE_MESSAGE);
+      return;
+    }
+  }
   try {
     const stat = fs.lstatSync(identity.directory);
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.device
@@ -2189,7 +2269,17 @@ function validateDirectoryIdentity(identity, file) {
     if (Number.isSafeInteger(identity.ino) && identity.ino > 0
       && Number.isSafeInteger(stat.ino) && stat.ino > 0
       && stat.ino !== identity.ino) throw new Error();
-  } catch (_) { throw new Error('下载目录不可用或挂载已变化，已保留文件和任务记录；请确认原目录后重试'); }
+    if (cacheable) {
+      if (directoryIdentityCache.size > 512) directoryIdentityCache.clear();
+      directoryIdentityCache.set(identity.directory, { at: now, ok: true });
+    }
+  } catch (_) {
+    if (cacheable) {
+      if (directoryIdentityCache.size > 512) directoryIdentityCache.clear();
+      directoryIdentityCache.set(identity.directory, { at: now, ok: false });
+    }
+    throw new Error(DIRECTORY_UNAVAILABLE_MESSAGE);
+  }
 }
 
 /** 同步核验 NAS 根目录、目标目录的设备与真实路径，防止错挂载同名文件被误认。 */
@@ -2379,20 +2469,54 @@ function resolveSeriesDir(seriesId, seriesTitle, covers) {
   return null;
 }
 
+// The download page polls get-download-tasks every 15s and re-verifies every completed task.
+// On a network share a verified file rarely changes, so keep the verdict for a while; a failed
+// check is re-tested sooner so a temporarily unmounted share recovers quickly. Local filesystems
+// are cheap to re-check and keep the original behaviour.
+const COMPLETE_FILE_TTL_MS = 10 * 60_000;
+const COMPLETE_FILE_FAIL_TTL_MS = 30_000;
+const COMPLETE_FILE_CACHE_LIMIT = 8000;
+const completeFileCache = new Map();
+
+// Stat once and reuse the result for type, size and identity checks; on a network mount every
+// additional stat is another round-trip.
 function hasCompleteTaskFile(task, conflicts = null) {
   if (!task?.savePath || task.pathConflict) return false;
   if (conflicts ? conflicts.get(task.savePath)?.has(task)
     : downloadTasks.some(other => other !== task && other.savePath === task.savePath && String(other.hongguoInfo?.vid) !== String(task.hongguoInfo?.vid))) return false;
+
+  const identity = task.fileIdentity;
+  const cacheable = typeof isNetworkFilesystem === 'function' && isNetworkFilesystem(path.dirname(task.savePath));
+  const cacheKey = `${task.savePath}\u0000${identity?.contentHash || identity?.mtimeNs || ''}`;
+  const now = Date.now();
+  if (cacheable) {
+    const cached = completeFileCache.get(cacheKey);
+    if (cached && now - cached.at < (cached.ok ? COMPLETE_FILE_TTL_MS : COMPLETE_FILE_FAIL_TTL_MS)) return cached.ok;
+  }
+
+  const checkFile = () => {
+    const stat = fs.lstatSync(task.savePath, { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 102400n) return false;
+    return identity
+      ? fileIdentityStillSameObject(identity, task.savePath, stat)
+      : legacyFileMatches(task, task.savePath);
+  };
+
+  let ok = false;
   try {
     if (task.nasDestination) {
-      if (!nasDestinationCurrent(task.nasDestination, task.savePath)) return false;
-    } else if (task.directoryIdentity) {
-      validateDirectoryIdentity(task.directoryIdentity, task.savePath);
+      ok = nasDestinationCurrent(task.nasDestination, task.savePath) ? checkFile() : false;
+    } else {
+      if (task.directoryIdentity) validateDirectoryIdentity(task.directoryIdentity, task.savePath);
+      ok = checkFile();
     }
-    if (!isRegularFile(task.savePath) || fs.statSync(task.savePath).size <= 1024 * 100) return false;
-    return task.fileIdentity ? fileIdentityStillSameObject(task.fileIdentity, task.savePath) : legacyFileMatches(task, task.savePath);
+  } catch (_) { ok = false; }
+
+  if (cacheable) {
+    if (completeFileCache.size >= COMPLETE_FILE_CACHE_LIMIT) completeFileCache.clear();
+    completeFileCache.set(cacheKey, { at: now, ok });
   }
-  catch (_) { return false; }
+  return ok;
 }
 
 function repairTaskDestination(task) {

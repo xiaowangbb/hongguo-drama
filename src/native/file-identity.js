@@ -24,8 +24,10 @@ function contentHash(file, size) {
   }
 }
 
-function readFileIdentity(file, { content = true } = {}) {
-  const stat = fs.lstatSync(file, { bigint: true });
+function readFileIdentity(file, { content = true, preloadedStat = null } = {}) {
+  // Callers that already stat'ed the file can pass the result to avoid a second round-trip on
+  // network filesystems. It must come from lstatSync(file, { bigint: true }).
+  const stat = preloadedStat || fs.lstatSync(file, { bigint: true });
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('下载视频不是普通文件');
   const size = Number(stat.size);
   const identity = {
