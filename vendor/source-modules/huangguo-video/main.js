@@ -748,17 +748,48 @@ function edgeCall(method, path, body, contentType) {
   return apiReply(data);
 }
 
-function playUrl(sourceId, episode) {
-  if (!sourceIdPattern.test(sourceId) || episode < 1) {
-    throw new Error("黄果集数无效");
-  }
-  const play = edgeCall("POST", "/api/videos/" + encodeURIComponent(sourceId) + "/episodes/" + episode + "/playback", "{}", "application/json");
+// 参考 HGhub / HuangGuo-for-fnOS 的做法：播放地址可直接通过无会话的
+// /api/edge/request 封包取得（streams.main 优先，hevc 兜底；preview 是试看片段，
+// 绝不当正片）。这条路径无会话状态，不会因会话握手失效而报 HTTP 400。
+function edgeRequestSimple(method, path, body) {
+  const address = siteBaseUrl + "/api/edge/request";
+  // edge 网关要求封包里的 body 为 base64（fnOS/HGhub 同款）；传原文会得到 HTTP 400。
+  const encodedBody = body ? host.base64Encode(host.utf8Encode(body)) : "";
+  const envelope = goJson({ body: encodedBody, content_type: body ? "application/json" : "", method, path });
+  const response = host.fetchText({
+    url: address,
+    method: "POST",
+    referer: siteBaseUrl + "/",
+    body: envelope,
+    userAgent,
+    headers: { "Content-Type": "application/json", Origin: siteBaseUrl },
+    mirrors: urlCandidates(address),
+  });
+  return apiReply(response.body);
+}
+
+function playStreamUrl(play) {
   const streams = isRecord(play) ? play.streams : null;
   if (streams !== undefined && streams !== null && (!isRecord(streams) || !stringFields(streams, ["main", "hevc"]))) {
     throw dataShapeError("播放地址字段类型不符");
   }
+  // 不用 preview：它是未解锁剧集的试看片段，不能当成正片下载。
   const found = isRecord(streams) ? firstNonEmpty(streams.main || "", streams.hevc || "") : "";
   return normalizeMediaUrl(siteBaseUrl + "/", found);
+}
+
+function playUrl(sourceId, episode) {
+  if (!sourceIdPattern.test(sourceId) || episode < 1) {
+    throw new Error("黄果集数无效");
+  }
+  const path = "/api/videos/" + encodeURIComponent(sourceId) + "/episodes/" + episode + "/playback";
+  // 主路径：无会话封包（fnOS/HGhub 同款），避开 ECDH 会话失效导致的 400。
+  // 只有接口本身没有正片地址、或封包通道异常时，才回退到旧的 ECDH 会话路径。
+  try {
+    const address = playStreamUrl(edgeRequestSimple("POST", path, "{}"));
+    if (address) return address;
+  } catch (_) { /* 降级到 ECDH 会话路径 */ }
+  return playStreamUrl(edgeCall("POST", path, "{}", "application/json"));
 }
 
 function rankingMetric(row) {
