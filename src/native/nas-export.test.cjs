@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { prepareNasExport, inspectNasEpisode, copyNasEpisode, checkNasDirectory } = require('./nas-export');
+const { createCipheriv } = require('node:crypto');
+const { prepareNasExport, inspectNasEpisode, copyNasEpisode, checkNasDirectory, decodeCoverImage } = require('./nas-export');
 
 const seriesId = '7691228619774999999';
 const episodes = [1, 2, 3].map(index => ({
@@ -181,4 +182,45 @@ test('index writes reject JSON bytes above the read limit before touching the in
   assert.equal(unchanged.length, largest.bytes);
   assert.equal(unchanged.equals(before), true);
   assert.equal(fs.readdirSync(destination.directory).some(name => name.startsWith('.nas-index-')), false);
+});
+
+test('decodeCoverImage 还原 HGhub 固定密钥加密的 JPEG 封面', () => {
+  const key = Buffer.from('f5d965df75336270', 'ascii');
+  const iv = Buffer.from('97b60394abc2fbe1', 'ascii');
+  // 构造一张最小 JPEG（魔数 + 填充到 16 的倍数），用上游固定密钥加密。
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(12, 0x11)]);
+  const cipher = createCipheriv('aes-128-cbc', key, iv);
+  const encrypted = Buffer.concat([cipher.update(jpeg), cipher.final()]);
+  assert.equal(encrypted.equals(jpeg), false, '加密后不应仍是明文');
+  const decoded = decodeCoverImage(encrypted);
+  assert.equal(decoded.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])), true, '应还原为 JPEG');
+  assert.equal(decoded.equals(jpeg), true, '应完整还原原图');
+});
+
+test('decodeCoverImage 对明文图片与非图片数据保持原样', () => {
+  const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.alloc(8, 2)]);
+  assert.equal(decodeCoverImage(png).equals(png), true, 'PNG 明文应原样返回');
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1]);
+  assert.equal(decodeCoverImage(jpeg) === jpeg, true, 'JPEG 明文应原样返回');
+  const junk = Buffer.alloc(32, 7);
+  assert.equal(decodeCoverImage(junk) === junk, true, '无法解密的数据应原样返回');
+  const short = Buffer.from([1, 2, 3]);
+  assert.equal(decodeCoverImage(short) === short, true, '非 16 倍数数据应原样返回');
+});
+
+test('prepareNasExport 保存加密封面时写出解密后的 poster', async t => {
+  const root = rootFor(t);
+  const key = Buffer.from('f5d965df75336270', 'ascii');
+  const iv = Buffer.from('97b60394abc2fbe1', 'ascii');
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(12, 0x22)]);
+  const cipher = createCipheriv('aes-128-cbc', key, iv);
+  const encrypted = Buffer.concat([cipher.update(jpeg), cipher.final()]);
+  const withCover = { ...series, cover: 'https://example.invalid/encrypted-cover.jpg' };
+  const { destination, warnings } = await prepareNasExport(
+    { root, folderName: '加密封面剧', series: withCover },
+    { metadataFetcher: async () => ({ success: false }), posterFetcher: async () => encrypted });
+  assert.equal(warnings.some(w => w.includes('封面未能保存')), false, '不应出现封面保存失败告警');
+  const saved = fs.readFileSync(path.join(destination.directory, 'poster.jpg'));
+  assert.equal(saved.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])), true, '落盘应是解密后的 JPEG');
+  assert.equal(saved.equals(jpeg), true, '落盘内容应完整还原');
 });

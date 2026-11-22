@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { createHash, randomUUID } = require('node:crypto');
+const { createDecipheriv, createHash, randomUUID } = require('node:crypto');
 const axios = require('axios');
 const { seasonTitle } = require('./watch-history');
 const { fetchPublicDetails } = require('./public-details');
@@ -228,6 +228,30 @@ function imageExtension(buffer) {
   throw new Error('来源未提供可用的 JPEG、PNG 或 WebP 封面');
 }
 
+// 部分来源（如黄果/HGhub 上游）的封面以固定 key/iv 的 AES-128-CBC 混淆，
+// 拿到的是加密二进制而非图片。这里对齐 HGhub/HuangGuo-for-fnOS 的做法：
+// 已是明文图片则原样放行，否则尝试解密，解密后仍不是已知图片就保留原样
+// （继续交给 imageExtension 走原有告警逻辑），避免误伤其它来源。
+const COVER_CIPHER_KEY = Buffer.from('f5d965df75336270', 'ascii');
+const COVER_CIPHER_IV = Buffer.from('97b60394abc2fbe1', 'ascii');
+function isKnownImage(buffer) {
+  if (buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return true;
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return true;
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return true;
+  if (buffer.length >= 6 && buffer.toString('ascii', 0, 6) === 'GIF8') return true;
+  return false;
+}
+function decodeCoverImage(buffer) {
+  if (!Buffer.isBuffer(buffer) || isKnownImage(buffer)) return buffer;
+  if (!buffer.length || buffer.length % 16 !== 0) return buffer;
+  try {
+    const decipher = createDecipheriv('aes-128-cbc', COVER_CIPHER_KEY, COVER_CIPHER_IV);
+    const plain = Buffer.concat([decipher.update(buffer), decipher.final()]);
+    if (isKnownImage(plain)) return plain;
+  } catch (_) { /* 非本来源的密文，按原样交由上层处理 */ }
+  return buffer;
+}
+
 async function fetchPoster(value) {
   const url = new URL(value);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('封面地址无效');
@@ -263,7 +287,7 @@ async function prepareOnce(destination, series, { metadataFetcher, posterFetcher
     if (!existing.some(Boolean)) {
       const cover = metadata.cover || series.cover;
       if (!cover) throw new Error('未提供封面');
-      const image = Buffer.from(await posterFetcher(cover));
+      const image = decodeCoverImage(Buffer.from(await posterFetcher(cover)));
       const extension = imageExtension(image);
       await writeMissing(path.join(directory, `poster.${extension}`), image);
     }
@@ -364,6 +388,6 @@ async function copyNasEpisode(task, destination) {
   return { copied, path: files.video };
 }
 
-module.exports = { prepareNasExport, inspectNasEpisode, copyNasEpisode, nasEpisodeFilename, checkNasDirectory: directoryAt,
+module.exports = { prepareNasExport, inspectNasEpisode, copyNasEpisode, nasEpisodeFilename, decodeCoverImage, checkNasDirectory: directoryAt,
   nasDirectoryIdentityCurrent: destination => directoryIdentityCurrent(destination.root, destination.rootIdentity)
     && directoryIdentityCurrent(destination.directory, destination.directoryIdentity) };
