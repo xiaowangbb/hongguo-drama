@@ -1,33 +1,36 @@
-const siteBaseUrl = "https://huangguo.video";
+const siteBaseUrl = "https://huangguoai.com";
 const userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1";
-const channel = "huangguo.video";
-const sourceAliases = ["huangguo-video", "huangguo.video"];
+const channel = "huangguoai.com";
+const searchPageSize = 20;
+const edgeProtocol = "dx150-edge-v1";
+const edgePlayback = "playback";
+const edgeMaxSequence = 16384;
+const edgeMaxLifetime = 600;
+const edgeSessionFailure = "黄果播放会话已失效";
+const baseMirrors = ["https://huangguoai.com", "https://thu.lbvrhyir.cc", "https://pku.xxbgwypx.cc", "https://ttvoij.ediayikma.cc", "https://thu.ediayikma.cc", "https://pku.ediayikma.cc", "https://fdu.ediayikma.cc", "https://thu.agdkczeyx.cc"];
+const mirrorDomains = ["lbvrhyir.cc", "xxbgwypx.cc", "ediayikma.cc", "agdkczeyx.cc"];
+const categories = [
+  { id: "ai-duanju", name: "AI 短剧" },
+  { id: "ai-manju", name: "AI 漫剧" },
+  { id: "ai-huanlian", name: "AI 换脸" },
+  { id: "ai-mogai", name: "AI 魔改" },
+];
+const rankingBoards = {
+  "huangguo-hot": { name: "热播榜", path: "hot" },
+  "huangguo-recommend": { name: "推荐榜", path: "recommend" },
+  "huangguo-potential": { name: "潜力榜", path: "potential" },
+};
 
-const videoCardPattern = /<article\b[^>]*class=["'][^"']*\bvideo-card\b[^"']*["'][^>]*>[\s\S]*?<\/article>/gi;
-const cardMetaPattern = /<p\b[^>]*class=["'][^"']*\bfont-mono-meta\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i;
-const detailMetaPattern = /<\/h1>[\s\S]*?<p\b[^>]*class=["'][^"']*\bfont-mono-meta\b[^"']*["'][^>]*>([\s\S]*?)<\/p>/i;
-const anyArticlePattern = /<article\b[^>]*>[\s\S]*?<\/article>/gi;
-const linkPattern = /<a\b[^>]*href=["']([^"']*\/(?:series|video)\/([^"'/?#]+)[^"']*)["'][^>]*>[\s\S]*?<\/a>/i;
-const linkPatternAll = new RegExp(linkPattern.source, "gi");
-const dataHlsPattern = /data-hls=["']([^"']+)["']/i;
-const jsonLdPattern = /<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-const metaTagPattern = /<meta\b[^>]*>/gi;
-const nonContentPattern = /<!--[\s\S]*?-->|<script\b[^>]*>[\s\S]*?<\/script\s*>|<style\b[^>]*>[\s\S]*?<\/style\s*>/gi;
-const htmlTagPattern = /<(\/?)([a-z][a-z0-9:-]*)\b(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
-const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
-const titleTagPattern = /<title[^>]*>([\s\S]*?)<\/title>/i;
-const headingPattern = /<h1[^>]*>([\s\S]*?)<\/h1>/i;
-const ogTitlePattern = /<meta\b[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["'][^>]*>/i;
-const descriptionPattern = /<meta\b[^>]*(?:name|property)=["'](?:description|og:description)["'][^>]*content=["']([^"']+)["'][^>]*>/i;
-const tagPattern = /<[^>]+class=["'][^"']*hg-tag[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/gi;
-const episodeNumberPattern = /(?:第\s*0*(\d+)\s*(?:集|话|期)|(?:更新至|共|全)\s*0*(\d+)\s*(?:集|话|期)|(?:episode|ep)\s*#?\s*0*(\d+))/i;
-const viewsPattern = /[0-9]+(?:\.[0-9]+)?\s*[w万]?\s*次播放/i;
-const datePattern = /\d{4}-\d{1,2}-\d{1,2}/;
-const finishedRemarkPattern = /(?:全\s*\d+\s*集|\d+\s*集全|已完结|大结局)/;
 const sourceIdPattern = /^[a-zA-Z0-9_-]{1,100}$/;
+const titleFragmentPattern = /(?:\b(?:class|type|title|aria-label)\s*=|(?:data|ata)-search-input|hg-search(?:__|-))/i;
+const episodeNumberPattern = /(?:第\s*0*(\d+)\s*(?:集|话|期)|(?:更新至|共|全)\s*0*(\d+)\s*(?:集|话|期)|(?:episode|ep)\s*#?\s*0*(\d+))/i;
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function byteLength(text) {
+  return host.utf8Encode(text).length;
 }
 
 function firstNonEmpty(...values) {
@@ -39,6 +42,65 @@ function firstNonEmpty(...values) {
   return "";
 }
 
+function mapString(row, ...keys) {
+  if (!isRecord(row)) {
+    return "";
+  }
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed !== "") {
+        return trimmed;
+      }
+    } else if (typeof value === "boolean" || typeof value === "number") {
+      return String(value);
+    }
+  }
+  return "";
+}
+
+function mapStringSlice(row, ...keys) {
+  const found = [];
+  const add = (text) => {
+    text = String(text).trim();
+    if (text !== "" && !found.includes(text)) {
+      found.push(text);
+    }
+  };
+  if (!isRecord(row)) {
+    return found;
+  }
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string") {
+      for (const part of value.split(/[,\/，、]/)) {
+        add(part);
+      }
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (isRecord(item)) {
+          const name = mapString(item, "name", "title", "label", "tag");
+          if (name !== "") {
+            add(name);
+          }
+          continue;
+        }
+        add(item === null ? "<nil>" : typeof item === "object" ? JSON.stringify(item) : item);
+      }
+    }
+  }
+  return found;
+}
+
+function atoi(text) {
+  return /^[+-]?\d+$/.test(text) ? parseInt(text, 10) : NaN;
+}
+
+function goJson(value) {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (character) => "\\u" + character.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+
 function htmlUnescape(text) {
   const named = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
   return text.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (entity, body) => {
@@ -48,106 +110,6 @@ function htmlUnescape(text) {
     }
     return Object.prototype.hasOwnProperty.call(named, body) ? named[body] : entity;
   });
-}
-
-function cleanText(text) {
-  text = text.replace(/<script\b[\s\S]*?<\/script>/gi, " ").replace(/<style\b[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ");
-  return htmlUnescape(text).replace(/[\t\n\f\r ]+/g, " ").trim();
-}
-
-function quoteMeta(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function allMatches(pattern, text) {
-  const found = [];
-  pattern.lastIndex = 0;
-  let match;
-  while ((match = pattern.exec(text)) !== null) {
-    found.push(match);
-    if (match[0] === "") {
-      pattern.lastIndex++;
-    }
-  }
-  return found;
-}
-
-function extractAttr(block, ...names) {
-  for (const name of names) {
-    const match = block.match(new RegExp("\\b" + quoteMeta(name) + "\\s*=\\s*[\"']([^\"']+)[\"']", "i"));
-    if (match) {
-      return htmlUnescape(match[1]).trim();
-    }
-  }
-  return "";
-}
-
-function classText(raw, className) {
-  if (className === "") {
-    return "";
-  }
-  const match = raw.match(new RegExp("<[^>]+class=[\"'][^\"']*" + quoteMeta(className) + "[^\"']*[\"'][^>]*>([\\s\\S]*?)</[^>]+>", "i"));
-  return match ? cleanText(match[1]) : "";
-}
-
-function pageTitle(body) {
-  const heading = body.match(headingPattern);
-  if (heading) {
-    const text = cleanText(heading[1]);
-    if (text !== "") {
-      return text;
-    }
-  }
-  const og = body.match(ogTitlePattern);
-  if (og) {
-    const text = htmlUnescape(og[1]).trim();
-    if (text !== "") {
-      return text;
-    }
-  }
-  const title = body.match(titleTagPattern);
-  return title ? cleanText(title[1]) : "";
-}
-
-function pageDescription(body) {
-  const match = body.match(descriptionPattern);
-  return match ? htmlUnescape(match[1]).trim() : "";
-}
-
-function pageTags(body) {
-  const tags = [];
-  for (const match of allMatches(tagPattern, body)) {
-    const value = cleanText(match[1]);
-    if (value !== "" && !tags.includes(value)) {
-      tags.push(value);
-    }
-  }
-  return tags;
-}
-
-function releaseStatusFromRemark(remark) {
-  if (remark.includes("未完结") || remark.includes("更新至") || remark.includes("连载")) {
-    return "ongoing";
-  }
-  if (finishedRemarkPattern.test(remark) || remark.includes("完结")) {
-    return "finished";
-  }
-  return "unknown";
-}
-
-function episodeIndex(text, fallback) {
-  const match = text.match(episodeNumberPattern);
-  if (match) {
-    for (const group of match.slice(1)) {
-      if (group !== undefined && group !== "") {
-        const number = parseInt(group, 10);
-        if (number > 0) {
-          return number;
-        }
-      }
-    }
-  }
-  return fallback;
 }
 
 function normalizeViews(text) {
@@ -166,11 +128,6 @@ function normalizeViews(text) {
   }
   const number = Number(text);
   return number <= 0 ? "" : String(number) + "次播放";
-}
-
-function firstMatchText(pattern, text) {
-  const match = text.match(pattern);
-  return match ? match[0].trim() : "";
 }
 
 function pad2(value) {
@@ -213,11 +170,6 @@ function parseAddress(raw) {
   } catch (error) {
     return null;
   }
-}
-
-function httpAddress(raw) {
-  const parsed = parseAddress(String(raw).trim());
-  return parsed !== null && (parsed.scheme === "http" || parsed.scheme === "https") && parsed.hostname !== "" && !parsed.userInfo;
 }
 
 function resolveUrl(base, ref) {
@@ -315,83 +267,58 @@ function normalizeMediaUrl(pageUrl, raw) {
   return lower.includes(".m3u8") || lower.includes(".mp4") ? resolved : "";
 }
 
-function coverAddress(value, pageUrl) {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const found = coverAddress(entry, pageUrl);
-      if (found !== "") {
-        return found;
-      }
-    }
-  } else if (isRecord(value)) {
-    for (const key of ["url", "contentUrl", "thumbnailUrl"]) {
-      const found = coverAddress(value[key], pageUrl);
-      if (found !== "") {
-        return found;
-      }
-    }
-  } else if (typeof value === "string" && value.trim() !== "") {
-    let resolved;
-    try {
-      resolved = host.resolveUrl(pageUrl, value.trim());
-    } catch (error) {
-      return "";
-    }
-    if (httpAddress(resolved)) {
-      return resolved;
-    }
-  }
-  return "";
-}
-
-function percentDecode(text, plusIsSpace) {
-  if (/%(?![0-9a-fA-F]{2})/.test(text)) {
-    return null;
-  }
-  const bytes = [];
-  for (let index = 0; index < text.length; index++) {
-    const character = text[index];
-    if (character === "%") {
-      bytes.push(parseInt(text.slice(index + 1, index + 3), 16));
-      index += 2;
-    } else if (plusIsSpace && character === "+") {
-      bytes.push(32);
-    } else {
-      for (const byte of host.utf8Encode(character)) {
-        bytes.push(byte);
-      }
-    }
-  }
-  return host.utf8Decode(bytes);
-}
-
-function queryValue(query, name) {
-  for (const part of query.split("&")) {
-    if (part === "" || part.includes(";")) {
-      continue;
-    }
-    const separator = part.indexOf("=");
-    const key = percentDecode(separator < 0 ? part : part.slice(0, separator), true);
-    const value = percentDecode(separator < 0 ? "" : part.slice(separator + 1), true);
-    if (key === name && value !== null) {
-      return value;
-    }
-  }
-  return "";
-}
-
 function queryEscape(text) {
   return encodeURIComponent(text)
     .replace(/[!'()*]/g, (character) => "%" + character.charCodeAt(0).toString(16).toUpperCase())
     .replace(/%20/g, "+");
 }
 
-function validCategory(category) {
-  return /^[+-]?\d+$/.test(category) && parseInt(category, 10) > 0;
+function encodeQuery(params) {
+  return Object.keys(params)
+    .sort()
+    .map((key) => queryEscape(key) + "=" + queryEscape(String(params[key])))
+    .join("&");
 }
 
-function fetchText(address, referer) {
-  return host.fetchText({ url: address, referer }).body;
+function base64UrlEncode(data) {
+  return host.base64Encode(data).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlDecode(text) {
+  if (typeof text !== "string" || !/^[A-Za-z0-9_-]*$/.test(text) || text.length % 4 === 1) {
+    return null;
+  }
+  try {
+    return host.base64Decode(text.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch (error) {
+    return null;
+  }
+}
+
+function episodeIndex(text, fallback) {
+  const match = text.match(episodeNumberPattern);
+  if (match) {
+    for (const group of match.slice(1)) {
+      if (group !== undefined && group !== "") {
+        const number = parseInt(group, 10);
+        if (number > 0) {
+          return number;
+        }
+      }
+    }
+  }
+  return fallback;
+}
+
+function chapterEpisode(chapter, fallback) {
+  const current = chapter.currentEpisode;
+  if (Number.isInteger(current) && current > 0) {
+    return current;
+  }
+  if (typeof current === "string") {
+    return episodeIndex(current, fallback);
+  }
+  return episodeIndex(chapter.title || "", fallback);
 }
 
 function cleanId(text) {
@@ -400,303 +327,216 @@ function cleanId(text) {
   return cut < 0 ? text : text.slice(0, cut);
 }
 
-function videoSourceId(href) {
-  const parsed = parseAddress(htmlUnescape(href));
-  const path = (parsed ? parsed.path : href).replace(/^\/+|\/+$/g, "");
-  const parts = path.split("/");
+function detailIdFrom(text) {
+  const parsed = parseAddress(htmlUnescape(text));
+  const parts = (parsed ? parsed.path : text).replace(/^\/+|\/+$/g, "").split("/");
   for (let index = 0; index + 1 < parts.length; index++) {
-    if (parts[index] === "series" || parts[index] === "video") {
-      const code = cleanId(parts[index + 1]);
-      return code === "" ? "" : parts[index] + "/" + code;
+    if (parts[index] === "detail") {
+      return cleanId(parts[index + 1]);
     }
   }
   return "";
 }
 
-function dataHls(raw, pageUrl) {
-  const match = raw.match(dataHlsPattern);
-  return match ? normalizeMediaUrl(pageUrl, match[1]) : "";
+function titleNeedsRepair(title, sourceId) {
+  title = title.trim();
+  return title === "" || title === sourceId || title === "短剧" || title === "搜索" || titleFragmentPattern.test(title) || (title.includes("搜索记录") && title.includes("暂无搜索记录"));
 }
 
-function elementBlock(raw, start, end, tag) {
-  let depth = 1;
-  const rest = raw.slice(end);
-  for (const match of allMatches(htmlTagPattern, rest)) {
-    if (match[2].toLowerCase() !== tag.toLowerCase()) {
-      continue;
-    }
-    if (match[1] !== "") {
-      depth--;
-    } else if (!match[0].trim().endsWith("/>")) {
-      depth++;
-    }
-    if (depth === 0) {
-      return raw.slice(start, end + match.index + match[0].length);
-    }
-  }
-  return raw.slice(start, end);
-}
-
-function classBlock(raw, className) {
-  for (const match of allMatches(htmlTagPattern, raw)) {
-    if (match[1] !== "") {
-      continue;
-    }
-    if (extractAttr(match[0], "class").split(/[\t\n\f\r ]+/).includes(className)) {
-      return elementBlock(raw, match.index, match.index + match[0].length, match[2]);
+function mapEpisodes(row) {
+  for (const key of ["episode_count", "episodeCount", "total_episodes", "totalEpisodes", "totalEpisode", "total_episode", "episodes", "total"]) {
+    const count = atoi(mapString(row, key));
+    if (count > 0) {
+      return String(count);
     }
   }
   return "";
 }
 
-function stringField(value) {
-  return value === undefined || value === null || typeof value === "string";
-}
-
-function jsonLdEntry(value) {
-  if (value === null) {
-    return {};
-  }
-  if (!isRecord(value) || !["@type", "@id", "url", "name", "datePublished", "uploadDate"].every((key) => stringField(value[key]))) {
-    return null;
-  }
-  return value;
-}
-
-function jsonLdRows(text) {
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch (error) {
-    return null;
-  }
-  const entry = jsonLdEntry(value);
-  if (entry === null) {
-    return null;
-  }
-  const graph = entry["@graph"];
-  const rows = [];
-  if (graph !== undefined && graph !== null) {
-    if (!Array.isArray(graph)) {
-      return null;
-    }
-    for (const item of graph) {
-      const row = jsonLdEntry(item);
-      if (row === null) {
-        return null;
-      }
-      rows.push(row);
-    }
-  }
-  rows.push(entry);
-  return rows;
-}
-
-function sameSourceHost(address) {
-  return sourceAliases.includes(address.hostname.toLowerCase());
-}
-
-function sortDetail(body, pageUrl, patch) {
-  const expected = parseAddress(pageUrl);
-  const trimPath = (path) => path.replace(/\/+$/, "");
-  let matched = false;
-  for (const block of allMatches(jsonLdPattern, body)) {
-    const rows = jsonLdRows(block[1]);
-    if (rows === null) {
-      continue;
-    }
-    for (const row of rows) {
-      const type = row["@type"] || "";
-      if (!["WebPage", "VideoObject", "TVSeries", "Movie"].includes(type)) {
-        continue;
-      }
-      const name = row.name || "";
-      const actual = parseAddress(firstNonEmpty(row.url || "", row["@id"] || ""));
-      if (!actual || (actual.host !== "" && actual.host.toLowerCase() !== expected.host.toLowerCase() && !sameSourceHost(actual)) || trimPath(actual.path) !== trimPath(expected.path) || name === "") {
-        continue;
-      }
-      matched = true;
-      patch.title = name;
-      const cover = firstNonEmpty(coverAddress(row.image, pageUrl), coverAddress(row.thumbnailUrl, pageUrl));
-      if (cover !== "") {
-        patch.cover = cover;
-        patch.coverUrl = cover;
-      }
-      const date = releaseDate(firstNonEmpty(row.uploadDate || "", row.datePublished || ""));
-      if (date !== "" && (!patch.onlineDate || type === "VideoObject")) {
-        patch.onlineDate = date;
-      }
-    }
-  }
-  if (!matched) {
-    throw new Error("黄果详情没有返回所请求剧集的元数据");
-  }
-  if (!patch.cover) {
-    for (const match of allMatches(metaTagPattern, body)) {
-      if (extractAttr(match[0], "property", "name").toLowerCase() === "og:image") {
-        const cover = coverAddress(extractAttr(match[0], "content"), pageUrl);
-        if (cover !== "") {
-          patch.cover = cover;
-          patch.coverUrl = cover;
+function dramaFromMap(row, pageUrl, category) {
+  let sourceId = firstNonEmpty(mapString(row, "id"), mapString(row, "videoId"), mapString(row, "video_id"), mapString(row, "vid"), mapString(row, "slug"));
+  if (sourceId === "") {
+    for (const value of Object.values(row)) {
+      if (typeof value === "string") {
+        const id = detailIdFrom(value);
+        if (id !== "") {
+          sourceId = id;
           break;
         }
       }
     }
   }
-  const meta = cleanText(classBlock(body.replace(nonContentPattern, ""), "hg-web-detail__meta"));
-  patch.views = normalizeViews(firstMatchText(viewsPattern, meta));
-  if (!patch.onlineDate && meta.includes("上线")) {
-    patch.onlineDate = releaseDate(firstMatchText(datePattern, meta));
+  const detailId = detailIdFrom(sourceId);
+  if (detailId !== "") {
+    sourceId = detailId;
   }
-  return patch;
-}
-
-function detailMetadata(body, pageUrl, sourceId) {
-  let drama = {
+  sourceId = cleanId(sourceId);
+  if (sourceId === "") {
+    return null;
+  }
+  const title = firstNonEmpty(mapString(row, "title"), mapString(row, "name"), mapString(row, "videoTitle"), mapString(row, "video_title"), mapString(row, "videoName"), mapString(row, "video_name"));
+  if (titleNeedsRepair(title, sourceId)) {
+    return null;
+  }
+  const cover = resolveUrl(pageUrl, firstNonEmpty(...["cover", "coverUrl", "cover_url", "coverImage", "cover_image", "image", "imageUrl", "thumbnail", "poster", "posterUrl"].map((key) => mapString(row, key))));
+  const description = firstNonEmpty(mapString(row, "desc"), mapString(row, "description"), mapString(row, "intro"), mapString(row, "summary"));
+  const episodes = mapEpisodes(row);
+  let status = "";
+  const finished = mapString(row, "is_finished").toLowerCase();
+  if (finished === "true" || finished === "1") {
+    status = "finished";
+  } else if (finished === "false" || finished === "0") {
+    status = "ongoing";
+  }
+  let remark = firstNonEmpty(mapString(row, "vod_remarks"), mapString(row, "remark"), mapString(row, "remarks"));
+  if (remark === "" && episodes !== "") {
+    remark = status === "finished" ? "全" + episodes + "集" : "更新至 " + episodes + " 集";
+  }
+  const viewKeys = ["views", "view_count", "viewCount", "view_num", "viewNum", "views_text", "view_count_text", "play_count", "playCount", "play_num", "playNum", "play_count_text", "hits", "hit_count", "plays", "play"];
+  const dateKeys = ["onlineDate", "online_date", "online_time", "onlineTime", "publish_date", "publishDate", "publish_time", "publishTime", "release_date", "releaseDate"];
+  const drama = {
     id: host.dramaId(sourceId),
     source: host.source,
     sourceId,
-    title: firstNonEmpty(pageTitle(body), "短剧"),
-    desc: pageDescription(body),
-    tags: pageTags(body),
+    title,
+    name: title,
+    desc: description,
+    intro: description,
+    cover,
+    coverUrl: cover,
+    totalEpisode: episodes,
+    episodeCount: episodes,
+    categoryName: category,
+    channelName: channel,
+    remark,
+    score: firstNonEmpty(mapString(row, "score"), mapString(row, "rating")),
+    views: normalizeViews(firstNonEmpty(...viewKeys.map((key) => mapString(row, key)))),
+    onlineDate: releaseDate(firstNonEmpty(...dateKeys.map((key) => mapString(row, key)))),
+    releaseStatus: status,
   };
-  try {
-    drama = sortDetail(body, pageUrl, Object.assign({}, drama));
-  } catch (error) {
-    drama = Object.assign({}, drama);
-  }
-  drama.name = drama.title;
-  drama.intro = drama.desc;
-  const meta = cleanText(classBlock(body.replace(nonContentPattern, ""), "hg-web-detail__meta"));
-  drama.releaseStatus = releaseStatusFromRemark(meta);
-  if (drama.releaseStatus === "unknown" && !sourceId.startsWith("video/")) {
-    const header = body.match(detailMetaPattern);
-    if (header) {
-      drama.releaseStatus = releaseStatusFromRemark(cleanText(header[1]));
-    }
+  const tags = mapStringSlice(row, "tags", "tag", "categories", "category");
+  if (tags.length > 0) {
+    drama.tags = tags;
   }
   return drama;
 }
 
-function displayTitle(drama) {
-  if ((drama.title || "").trim() !== "") {
-    return drama.title;
-  }
-  if ((drama.name || "").trim() !== "") {
-    return drama.name;
-  }
-  return "短剧";
-}
-
-function parseCards(raw, pageUrl) {
-  let blocks = allMatches(videoCardPattern, raw).map((match) => match[0]);
-  if (blocks.length === 0) {
-    blocks = allMatches(anyArticlePattern, raw)
-      .map((match) => match[0])
-      .filter((block) => block.toLowerCase().includes("video-card"));
-  }
+function parseCards(value, pageUrl, category) {
   const seen = new Set();
   const items = [];
-  for (const block of blocks) {
-    const link = block.match(linkPattern);
-    if (!link) {
-      continue;
-    }
-    const sourceId = videoSourceId(link[1]);
-    if (sourceId === "" || seen.has(sourceId)) {
-      continue;
-    }
-    seen.add(sourceId);
-    const title = firstNonEmpty(extractAttr(block, "title", "alt", "aria-label"), cleanText(block));
-    const cover = resolveUrl(pageUrl, extractAttr(block, "data-src", "data-original", "src"));
-    const category = sourceId.startsWith("series/") ? "series" : "video";
-    const description = firstNonEmpty(extractAttr(block, "data-description", "description"), pageDescription(block));
-    let status = "";
-    if (category === "series") {
-      const meta = block.match(cardMetaPattern);
-      if (meta) {
-        status = releaseStatusFromRemark(cleanText(meta[1]));
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        walk(item);
+      }
+    } else if (isRecord(node)) {
+      const drama = dramaFromMap(node, pageUrl, category);
+      if (drama !== null) {
+        if (!seen.has(drama.sourceId)) {
+          seen.add(drama.sourceId);
+          items.push(drama);
+        }
+        return;
+      }
+      for (const child of Object.values(node)) {
+        walk(child);
       }
     }
-    items.push({
-      id: host.dramaId(sourceId),
-      source: host.source,
-      sourceId,
-      title,
-      name: title,
-      desc: description,
-      intro: description,
-      cover,
-      coverUrl: cover,
-      categoryName: category,
-      channelName: channel,
-      remark: firstNonEmpty(classText(block, "bg-black/55"), classText(block, "text-gold-dim")),
-      releaseStatus: status,
-    });
-  }
+  };
+  walk(value);
   return items;
 }
 
-function nextUnusedIndex(preferred, used) {
-  if (preferred <= 0) {
-    preferred = 1;
+function rehost(raw, mirror) {
+  const address = parseAddress(raw);
+  const target = parseAddress(mirror);
+  if (!address || !target || target.host === "") {
+    return "";
   }
-  if (!used.has(preferred)) {
-    return preferred;
-  }
-  for (let index = 1; ; index++) {
-    if (!used.has(index)) {
-      return index;
-    }
-  }
+  return target.scheme + "://" + target.host + raw.slice((address.scheme + "://" + address.host).length);
 }
 
-function parseEpisodes(raw, pageUrl) {
-  let blocks = allMatches(videoCardPattern, raw).map((match) => match[0]);
-  if (blocks.length === 0) {
-    blocks = allMatches(linkPatternAll, raw).map((match) => match[0]);
+function generatedMirrors(seed, count) {
+  const found = [];
+  const seen = new Set();
+  for (let index = 0; found.length < count && index < count * 4; index++) {
+    const hex = host.hexEncode(host.sha256(host.utf8Encode(seed + ":" + index)));
+    let sub = hex.slice(0, 6).replace(/^[0-9]+/, "");
+    if (sub.length < 4) {
+      sub = hex.slice(6, 12);
+    }
+    if (sub.length > 6) {
+      sub = sub.slice(0, 6);
+    }
+    if (sub.length < 3 || seen.has(sub)) {
+      continue;
+    }
+    seen.add(sub);
+    found.push("https://" + sub + "." + mirrorDomains[found.length % mirrorDomains.length]);
   }
-  const positions = new Map();
-  const episodes = [];
-  let numbered = false;
-  for (const block of blocks) {
-    const link = block.match(linkPattern);
-    if (!link) {
-      continue;
+  return found;
+}
+
+function urlCandidates(raw) {
+  const address = parseAddress(raw);
+  if (!address || address.hostname !== "huangguoai.com") {
+    return [raw];
+  }
+  const found = [];
+  const add = (candidate) => {
+    if (candidate !== "" && !found.includes(candidate)) {
+      found.push(candidate);
     }
-    const key = videoSourceId(link[1]);
-    if (key === "" || !key.startsWith("video/")) {
-      continue;
-    }
-    const fullUrl = resolveUrl(pageUrl, link[1]);
-    const title = firstNonEmpty(extractAttr(block, "title"), extractAttr(block, "alt"), cleanText(block));
-    const index = episodeIndex(cleanText(block), episodeIndex(title, 0));
-    numbered = numbered || index > 0;
-    const episode = { key, title, url: fullUrl, index, hls: dataHls(block, pageUrl) };
-    if (positions.has(fullUrl)) {
-      const position = positions.get(fullUrl);
-      if (episodes[position].index <= 0 && index > 0) {
-        episodes[position] = episode;
+  };
+  baseMirrors.forEach((mirror, index) => {
+    if (index === 1) {
+      for (const generated of generatedMirrors(raw, 8)) {
+        add(rehost(raw, generated));
       }
-    } else {
-      positions.set(fullUrl, episodes.length);
-      episodes.push(episode);
     }
+    add(rehost(raw, mirror));
+  });
+  return found.length === 0 ? [raw] : found;
+}
+
+function apiReply(text) {
+  let reply;
+  try {
+    reply = JSON.parse(text);
+  } catch (error) {
+    throw new Error("黄果接口返回格式无效：" + error.message);
   }
-  const result = [];
-  const used = new Set();
-  for (const episode of episodes) {
-    if (numbered && episode.index <= 0) {
-      continue;
-    }
-    episode.index = nextUnusedIndex(episode.index, used);
-    used.add(episode.index);
-    result.push(episode);
+  if (reply === null) {
+    reply = {};
   }
-  return result
-    .map((episode, position) => ({ episode, position }))
-    .sort((left, right) => left.episode.index - right.episode.index || (left.episode.key < right.episode.key ? -1 : left.episode.key > right.episode.key ? 1 : left.position - right.position))
-    .map((entry) => entry.episode);
+  if (!isRecord(reply) || !(reply.status === undefined || reply.status === null || Number.isInteger(reply.status)) || !(reply.msg === undefined || reply.msg === null || typeof reply.msg === "string")) {
+    throw new Error("黄果接口返回格式无效：字段类型不符");
+  }
+  if (reply.status !== 1) {
+    throw new Error("黄果接口返回失败：" + firstNonEmpty(reply.msg || "", "未知错误"));
+  }
+  return reply.data === undefined ? null : reply.data;
+}
+
+function api(path) {
+  const address = siteBaseUrl + "/api/edge/request";
+  const envelope = goJson({ body: "", content_type: "", method: "GET", path });
+  const response = host.fetchText({ url: address, referer: siteBaseUrl + "/", body: envelope, mirrors: urlCandidates(address) });
+  return apiReply(response.body);
+}
+
+function dataShapeError(message) {
+  return new Error("黄果接口数据格式已变化：" + message);
+}
+
+function chapterOf(sourceId, episode, title) {
+  let key = "auto-1";
+  let pageUrl = siteBaseUrl + "/video/" + sourceId + "/";
+  if (episode > 1) {
+    key = "ep-" + episode;
+    pageUrl += key + "/";
+  }
+  return { id: host.chapterId(sourceId, key), source: host.source, title: firstNonEmpty(title, "第" + episode + "集"), pageUrl, currentEpisode: episode };
 }
 
 function sortChapters(chapters) {
@@ -718,77 +558,107 @@ function uniqueChapters(chapters) {
   });
 }
 
-function fetchDetail(sourceId) {
-  sourceId = sourceId.trim().replace(/^\/+|\/+$/g, "");
-  if (sourceId === "") {
-    throw new Error("empty huangguo-video sourceID");
-  }
-  let detailPath = sourceId;
-  if (!detailPath.startsWith("series/") && !detailPath.startsWith("video/")) {
-    detailPath = "series/" + detailPath;
-  }
-  const detailUrl = siteBaseUrl + "/" + detailPath;
-  const body = fetchText(detailUrl, siteBaseUrl + "/");
-  const drama = detailMetadata(body, detailUrl, sourceId);
-  const title = displayTitle(drama);
-  let episodes = [];
-  if (detailPath.startsWith("video/")) {
-    const hls = dataHls(body, detailUrl);
-    if (hls !== "") {
-      episodes = [{ key: "1", title, url: detailUrl, index: 1, hls }];
-    }
-  } else {
-    episodes = parseEpisodes(body, detailUrl);
-  }
-  if (episodes.length === 0) {
-    const hls = dataHls(body, detailUrl);
-    if (hls !== "") {
-      episodes = [{ key: "1", title, url: detailUrl, index: 1, hls }];
-    }
-  }
-  const chapters = [];
-  for (const episode of episodes) {
-    const index = episode.index > 0 ? episode.index : chapters.length + 1;
-    chapters.push({
-      id: host.chapterId(sourceId, episode.key || String(index)),
-      source: host.source,
-      title: episode.title.trim() || "第" + index + "集",
-      videoUrl: episode.hls,
-      pageUrl: episode.url,
-      currentEpisode: index,
-    });
-  }
-  return { drama, chapters: uniqueChapters(sortChapters(chapters)) };
+function edgePost(base, body) {
+  return host.fetch({
+    method: "POST",
+    url: base + "/api/" + edgePlayback + "/request",
+    body: goJson(body),
+    headers: { "Content-Type": "application/json", "User-Agent": userAgent, Origin: base, Referer: base + "/", "Accept-Language": "zh-CN,zh;q=0.9" },
+    limit: 2 << 20,
+    timeoutMs: 12000,
+    anyStatus: true,
+  });
 }
 
-function previewTokenValid(token) {
-  return token.length <= 4096 && !/[\r\n\t ]/.test(token);
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
 }
 
-function optionalInteger(value) {
-  return value === undefined || value === null || Number.isInteger(value);
+function stringFields(value, keys) {
+  return keys.every((key) => value[key] === undefined || value[key] === null || typeof value[key] === "string");
 }
 
-function fetchPreviewToken(siteOrigin, referer) {
-  const failure = new Error("黄果视频未返回有效播放凭证，请稍后重试");
-  const headers = {
-    "User-Agent": userAgent,
-    Referer: referer,
-    Accept: "application/json",
-    "Accept-Language": "zh-CN,zh;q=0.9",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Dest": "empty",
+function integerFields(value, keys) {
+  return keys.every((key) => value[key] === undefined || value[key] === null || Number.isInteger(value[key]));
+}
+
+function openEdgeSession(base) {
+  const failure = new Error("黄果播放会话握手失败，请稍后重试");
+  const pair = host.ecdhP256KeyPair();
+  const response = edgePost(base, { client_pub: base64UrlEncode(pair.publicKey), type: "hello", v: 1 });
+  let hello;
+  try {
+    hello = JSON.parse(response.body);
+  } catch (error) {
+    throw failure;
+  }
+  if (hello === null) {
+    hello = {};
+  }
+  if (
+    response.status !== 200 ||
+    !isRecord(hello) ||
+    !stringFields(hello, ["type", "kid", "sid", "site", "server_pub", "salt"]) ||
+    !integerFields(hello, ["server_time", "expires_at"]) ||
+    hello.type !== "hello" ||
+    !hello.kid ||
+    !hello.sid ||
+    !hello.site ||
+    (hello.expires_at || 0) <= (hello.server_time || 0)
+  ) {
+    throw failure;
+  }
+  const serverPublic = base64UrlDecode(hello.server_pub || "");
+  const salt = base64UrlDecode(hello.salt || "");
+  if (serverPublic === null || salt === null || salt.length !== 32) {
+    throw failure;
+  }
+  let secret;
+  try {
+    secret = host.ecdhP256(pair.privateKey, serverPublic);
+  } catch (error) {
+    throw failure;
+  }
+  const info = [edgeProtocol, edgePlayback, hello.site, hello.kid, hello.sid].join("\n");
+  const lifetime = Math.min(hello.expires_at - (hello.server_time || 0), edgeMaxLifetime);
+  return {
+    base,
+    info,
+    kid: hello.kid,
+    sid: hello.sid,
+    offset: (hello.server_time || 0) - nowSeconds(),
+    expires: Date.now() + lifetime * 1000,
+    sequence: 0,
+    requestKey: host.hexEncode(host.hkdfSha256(secret, salt, info + "\nreq", 32)),
+    responseKey: host.hexEncode(host.hkdfSha256(secret, salt, info + "\nres", 32)),
   };
-  const page = parseAddress(referer);
-  if (page && page.host !== "") {
-    headers.Origin = page.scheme + "://" + page.host;
-  }
-  const response = host.fetch({ method: "GET", url: siteOrigin + "/api/preview-token", headers, limit: 16 << 10, timeoutMs: 12000, followRedirects: true });
+}
+
+function sessionUsable(session, base) {
+  return session !== null && session.base === base && session.sequence < edgeMaxSequence && Date.now() + 5000 < session.expires;
+}
+
+function edgeExchange(session, method, path, body, contentType) {
+  session.sequence++;
+  host.cacheSet("edge-session", JSON.stringify(session), 0);
+  const sequence = session.sequence;
+  const stamp = nowSeconds() + session.offset;
+  const nonce = new Uint8Array(12);
+  nonce[8] = (sequence >>> 24) & 255;
+  nonce[9] = (sequence >>> 16) & 255;
+  nonce[10] = (sequence >>> 8) & 255;
+  nonce[11] = sequence & 255;
+  const associated = (direction) => [session.info, direction, String(sequence), String(stamp)].join("\n");
+  const packet = goJson({ request: { body: host.base64Encode(body), content_type: contentType, method, path } });
+  const sealed = host.aesGcmSeal(host.hexDecode(session.requestKey), nonce, packet, associated("req"));
+  const response = edgePost(session.base, { ciphertext: base64UrlEncode(sealed), kid: session.kid, seq: sequence, sid: session.sid, ts: stamp, type: "call", v: 1 });
+  const expired = new Error(edgeSessionFailure);
+  expired.session = true;
   let result;
   try {
     result = JSON.parse(response.body);
   } catch (error) {
-    throw failure;
+    throw expired;
   }
   if (result === null) {
     result = {};
@@ -796,142 +666,239 @@ function fetchPreviewToken(siteOrigin, referer) {
   if (
     response.status !== 200 ||
     !isRecord(result) ||
-    !(result.ok === undefined || result.ok === null || typeof result.ok === "boolean") ||
-    !stringField(result.token) ||
-    !optionalInteger(result.expires_at) ||
-    !optionalInteger(result.expires_in) ||
-    result.ok !== true ||
-    !result.token ||
-    !previewTokenValid(result.token)
+    !stringFields(result, ["type", "sid", "ciphertext"]) ||
+    !(result.seq === undefined || result.seq === null || (Number.isInteger(result.seq) && result.seq >= 0 && result.seq <= 4294967295)) ||
+    result.type !== "result" ||
+    result.sid !== session.sid ||
+    result.seq !== sequence
   ) {
+    throw expired;
+  }
+  const encrypted = base64UrlDecode(result.ciphertext || "");
+  if (encrypted === null) {
+    throw expired;
+  }
+  let plain;
+  try {
+    plain = host.aesGcmOpen(host.hexDecode(session.responseKey), nonce, encrypted, associated("res"));
+  } catch (error) {
+    throw expired;
+  }
+  let inner;
+  try {
+    inner = JSON.parse(host.utf8Decode(plain));
+  } catch (error) {
+    throw new Error("黄果接口返回格式无效：" + error.message);
+  }
+  if (inner === null) {
+    inner = {};
+  }
+  if (!isRecord(inner) || !integerFields(inner, ["status"]) || !stringFields(inner, ["body"])) {
+    throw new Error("黄果接口返回格式无效：字段类型不符");
+  }
+  const status = inner.status || 0;
+  if (status < 200 || status >= 300) {
+    throw new Error("黄果接口返回失败：HTTP " + status);
+  }
+  return host.utf8Decode(host.base64Decode(inner.body || ""));
+}
+
+function edgeCall(method, path, body, contentType) {
+  const base = firstNonEmpty(host.preferredSite(), siteBaseUrl).replace(/\/+$/, "");
+  const data = host.exclusive(() => {
+    for (let attempt = 0; ; attempt++) {
+      const cached = host.cacheGet("edge-session");
+      let session = cached === null ? null : JSON.parse(cached);
+      if (!sessionUsable(session, base)) {
+        session = openEdgeSession(base);
+        host.cacheSet("edge-session", JSON.stringify(session), 0);
+      }
+      try {
+        return edgeExchange(session, method, path, body, contentType);
+      } catch (error) {
+        host.cacheSet("edge-session", null, 0);
+        if (!error.session || attempt > 0) {
+          throw error;
+        }
+      }
+    }
+  });
+  return apiReply(data);
+}
+
+function playUrl(sourceId, episode) {
+  if (!sourceIdPattern.test(sourceId) || episode < 1) {
+    throw new Error("黄果集数无效");
+  }
+  const play = edgeCall("POST", "/api/videos/" + encodeURIComponent(sourceId) + "/episodes/" + episode + "/playback", "{}", "application/json");
+  const streams = isRecord(play) ? play.streams : null;
+  if (streams !== undefined && streams !== null && (!isRecord(streams) || !stringFields(streams, ["main", "hevc"]))) {
+    throw dataShapeError("播放地址字段类型不符");
+  }
+  const found = isRecord(streams) ? firstNonEmpty(streams.main || "", streams.hevc || "") : "";
+  return normalizeMediaUrl(siteBaseUrl + "/", found);
+}
+
+function rankingMetric(row) {
+  const label = mapString(row, "metric_label");
+  const text = mapString(row, "metric_value");
+  const value = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(text) ? Number(text) : NaN;
+  if (label === "" || isNaN(value)) {
+    return "";
+  }
+  if (value >= 10000) {
+    return label + " " + (value / 10000).toFixed(1) + "万";
+  }
+  return label + " " + String(value);
+}
+
+function parseRanking(rows, pageUrl) {
+  const failure = new Error("黄果未返回有效榜单");
+  if (!Array.isArray(rows) || rows.length === 0 || rows.length > 100) {
     throw failure;
   }
-  const now = Date.now();
-  let expires = now + Math.max(30, Math.min(result.expires_in || 0, 1800)) * 1000;
-  if (result.expires_at > 0) {
-    expires = result.expires_at * 1000;
-  }
-  if (expires <= now) {
-    throw new Error("黄果视频返回的播放凭证已过期，请重试；反复出现时请检查设备时间");
-  }
-  return { token: result.token, expires };
-}
-
-function cachedToken(siteOrigin) {
-  const cached = host.cacheGet("preview:" + siteOrigin);
-  if (cached === null) {
-    return null;
-  }
-  const session = JSON.parse(cached);
-  return Date.now() + 15000 < session.expires ? session : null;
-}
-
-function addressOrigin(address) {
-  const parsed = parseAddress(address);
-  return parsed.scheme + "://" + parsed.host;
+  const items = [];
+  const seen = new Set();
+  rows.forEach((row, index) => {
+    if (!isRecord(row)) {
+      throw failure;
+    }
+    row.id = row.video_id === undefined ? null : row.video_id;
+    const drama = dramaFromMap(row, pageUrl, mapString(row, "cate_name"));
+    if (drama === null || !sourceIdPattern.test(drama.sourceId) || seen.has(drama.sourceId)) {
+      throw failure;
+    }
+    seen.add(drama.sourceId);
+    let rank = atoi(mapString(row, "rank"));
+    if (!(rank >= 1)) {
+      rank = index + 1;
+    }
+    const item = { rank, drama };
+    const metric = rankingMetric(row);
+    if (metric !== "") {
+      item.metric = metric;
+    }
+    items.push(item);
+  });
+  return { items, totalPages: 1 };
 }
 
 module.exports = {
-  validCategory,
+  validCategory(category) {
+    return categories.some((entry) => entry.id === category);
+  },
 
   categories() {
-    const body = fetchText(siteBaseUrl + "/videos", siteBaseUrl + "/");
-    const categories = [];
-    const seen = new Set();
-    for (const match of allMatches(anchorPattern, body)) {
-      const href = htmlUnescape(extractAttr("<a " + match[1] + ">", "href"));
-      const address = parseAddress(href);
-      if (!address || (address.path !== "" && address.path.replace(/\/+$/, "") !== "/videos")) {
-        continue;
-      }
-      const id = queryValue(address.query, "category");
-      const name = htmlUnescape(match[2].replace(/<[^>]*>/g, "")).trim();
-      if (id === "" || id.length > 128 || /[|/\\\u0000\r\n]/.test(id) || !validCategory(id) || seen.has(id) || name === "" || Array.from(name).length > 24) {
-        continue;
-      }
-      seen.add(id);
-      categories.push({ id, name });
-    }
-    return categories;
+    return categories.slice();
   },
 
   catalogPage(page, category) {
-    let address = siteBaseUrl + "/videos?page=" + page;
+    let selected = categories;
     if (category !== "") {
-      address += "&category=" + queryEscape(category);
+      const found = categories.find((entry) => entry.id === category);
+      if (found) {
+        selected = [found];
+      }
     }
-    const items = parseCards(fetchText(address, siteBaseUrl + "/"), address);
-    return { items, hasMore: items.length >= 20 };
+    let items = [];
+    const failures = [];
+    let more = false;
+    for (const entry of selected) {
+      let found = [];
+      try {
+        const body = api("/api/videos/category/" + encodeURIComponent(entry.id) + "?sort=hot&page=" + page + "&size=24");
+        found = parseCards(body, siteBaseUrl + "/", entry.name);
+      } catch (error) {
+        failures.push(entry.name + ": " + error.message);
+      }
+      items = items.concat(found);
+      more = more || found.length >= 24;
+    }
+    return { items, hasMore: more || failures.length > 0, warning: failures.join("\n") };
+  },
+
+  search(page, query) {
+    query = query.trim();
+    if (query === "" || byteLength(query) > 256) {
+      throw new Error("黄果搜索关键词无效");
+    }
+    const result = api("/api/search?" + encodeQuery({ q: query, page: String(page), size: String(searchPageSize) }));
+    if (result !== null && !isRecord(result)) {
+      throw dataShapeError("搜索结果类型不符");
+    }
+    const pagination = result === null ? null : result.pagination;
+    if (pagination !== undefined && pagination !== null && (!isRecord(pagination) || !integerFields(pagination, ["pages"]))) {
+      throw dataShapeError("分页字段类型不符");
+    }
+    const pages = isRecord(pagination) ? pagination.pages || 0 : 0;
+    const items = parseCards(result === null ? null : result.items, siteBaseUrl + "/", "");
+    return { items, hasMore: page < pages };
   },
 
   detail(sourceId) {
-    return fetchDetail(sourceId);
+    sourceId = sourceId.trim().replace(/^\/+|\/+$/g, "");
+    if (sourceId.startsWith("detail/")) {
+      sourceId = sourceId.slice("detail/".length);
+    }
+    if (!sourceIdPattern.test(sourceId)) {
+      throw new Error("无效的黄果剧集 ID");
+    }
+    const detail = api("/api/videos/" + encodeURIComponent(sourceId));
+    if (detail !== null && !isRecord(detail)) {
+      throw dataShapeError("详情类型不符");
+    }
+    const drama = detail === null ? null : dramaFromMap(detail, siteBaseUrl + "/", "");
+    if (drama === null || drama.sourceId !== sourceId) {
+      throw new Error("黄果详情与请求剧集不符");
+    }
+    const rows = Array.isArray(detail.episodes) ? detail.episodes : [];
+    let chapters = [];
+    for (const value of rows) {
+      const row = isRecord(value) ? value : null;
+      const episode = atoi(mapString(row, "ep_num"));
+      if (!(episode >= 1)) {
+        continue;
+      }
+      chapters.push(chapterOf(sourceId, episode, mapString(row, "title")));
+    }
+    if (rows.length === 0) {
+      chapters.push(chapterOf(sourceId, 1, drama.title.trim() !== "" ? drama.title : "短剧"));
+    }
+    chapters = uniqueChapters(sortChapters(chapters));
+    return { drama, chapters };
   },
 
   resolveMedia(task) {
-    let chapter = task.chapter;
-    if (!chapter.pageUrl) {
-      const dramaId = task.dramaId.trim();
-      const separator = dramaId.indexOf(":");
-      const sourceId = separator < 0 ? "" : dramaId.slice(separator + 1).trim();
-      if (separator >= 0 && sourceId !== "" && dramaId.slice(0, separator).trim().toLowerCase() === host.source) {
-        let chapters;
-        try {
-          chapters = fetchDetail(sourceId).chapters;
-        } catch (error) {
-          throw new Error("刷新旧任务播放地址失败: " + error.message);
-        }
-        const fresh = chapters.find((item) => item.id === chapter.id);
-        if (!fresh) {
-          throw new Error("原章节已变化，请更新该合集后重新下载");
-        }
-        chapter = fresh;
-      }
+    const dramaId = task.dramaId.trim();
+    const separator = dramaId.indexOf(":");
+    const sourceId = separator < 0 ? "" : dramaId.slice(separator + 1).trim();
+    if (separator < 0 || sourceId === "") {
+      throw new Error("黄果剧集信息无效");
     }
-    const media = { url: chapter.videoUrl, referer: firstNonEmpty(chapter.referer || "", siteBaseUrl + "/") };
-    if (chapter.pageUrl) {
-      const response = host.fetchText({ url: chapter.pageUrl, referer: media.referer });
-      media.url = dataHls(response.body, response.url);
-      media.referer = response.url;
-    }
-    return host.finishMedia(media);
+    const address = playUrl(sourceId, chapterEpisode(task.chapter, task.index));
+    return host.finishMedia({ url: address, referer: firstNonEmpty(task.chapter.referer || "", siteBaseUrl + "/") });
   },
 
-  coverAddress(drama, sourceId) {
-    let parts = sourceId.split("/");
-    if (parts.length === 1) {
-      parts = ["series", sourceId];
+  rankingPage(boardId, page) {
+    const board = rankingBoards[boardId];
+    if (!board) {
+      throw new Error("未知的黄果榜单");
     }
-    if (parts.length !== 2 || (parts[0] !== "series" && parts[0] !== "video") || !sourceIdPattern.test(parts[1])) {
-      throw new Error("无效的黄果剧集 ID");
+    if (page !== 1) {
+      throw new Error("该榜单只有一页");
     }
-    const pageUrl = siteBaseUrl + "/" + parts[0] + "/" + encodeURIComponent(parts[1]);
-    const body = fetchText(pageUrl, siteBaseUrl + "/");
-    return sortDetail(body, pageUrl, { id: drama.id, source: host.source, sourceId }).cover || "";
-  },
-
-  mediaAuthorization(address, referer) {
-    const siteOrigin = addressOrigin(address);
-    let session = cachedToken(siteOrigin);
-    if (session === null) {
-      session = host.exclusive(() => {
-        const current = cachedToken(siteOrigin);
-        if (current !== null) {
-          return current;
-        }
-        const fresh = fetchPreviewToken(siteOrigin, referer);
-        host.cacheSet("preview:" + siteOrigin, JSON.stringify(fresh), 0);
-        return fresh;
-      });
+    const ranking = api("/api/ranks/" + board.path);
+    if (ranking !== null && !isRecord(ranking)) {
+      throw dataShapeError("榜单类型不符");
     }
-    return { header: "X-Preview-Token", value: session.token };
-  },
-
-  rejectMediaAuthorization(address, value) {
-    const key = "preview:" + addressOrigin(address);
-    const cached = host.cacheGet(key);
-    if (cached !== null && JSON.parse(cached).token === value) {
-      host.cacheSet(key, null, 0);
+    const rows = ranking === null || ranking.items === undefined || ranking.items === null ? [] : ranking.items;
+    if (!Array.isArray(rows)) {
+      throw dataShapeError("榜单类型不符");
+    }
+    try {
+      return parseRanking(rows, siteBaseUrl + "/");
+    } catch (error) {
+      throw new Error(board.name + ": " + error.message);
     }
   },
 };

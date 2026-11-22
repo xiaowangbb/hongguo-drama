@@ -102,28 +102,14 @@
     {
       "id": "huangguo-video",
       "name": "黄果视频",
-      "version": "1.0.1",
-      "description": "视频剧集",
+      "version": "1.0.2",
+      "description": "黄果短剧 · 搜索 · 分类 · 热播榜（新版播放接口）",
       "api": 1,
       "adult": true,
       "repo": "guoapp-modules/huangguo-video",
-      "tag": "v1.0.1",
+      "tag": "v1.0.2-local",
       "sha256": {
-        "manifest.json": "a08630adbd41b4856b251aa1f5588bbe5d8087147c823c75a70f176d5f8ab2d4",
-        "main.js": "317cc53266d1493b510e6d37cfd255a88e552224a469e0b96d41a8bfa21dc62e"
-      }
-    },
-    {
-      "id": "huangguoai",
-      "name": "黄果 AI",
-      "version": "1.0.1",
-      "description": "AI 短剧",
-      "api": 1,
-      "adult": true,
-      "repo": "guoapp-modules/huangguoai",
-      "tag": "v1.0.1",
-      "sha256": {
-        "manifest.json": "7439d054b4672d1dc268bacfc886650e5142531905ff0fadc363e07af67efb61",
+        "manifest.json": "fa3455479661d5ab6a31dfe0b4722a1a642ecd3783e2489eb859e6288825b2ae",
         "main.js": "5b9e86ac42295b94b2abe1c8ee6a09cb2d86e01e45e44809f34ecb8b1cb7c5d0"
       }
     },
