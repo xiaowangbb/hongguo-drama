@@ -521,7 +521,16 @@ function apiReply(text) {
 function api(path) {
   const address = siteBaseUrl + "/api/edge/request";
   const envelope = goJson({ body: "", content_type: "", method: "GET", path });
-  const response = host.fetchText({ url: address, referer: siteBaseUrl + "/", body: envelope, mirrors: urlCandidates(address) });
+  // 黄果 edge 网关要求 POST + application/json；发成 GET（宿主默认方法）会被判 403。
+  const response = host.fetchText({
+    url: address,
+    method: "POST",
+    referer: siteBaseUrl + "/",
+    body: envelope,
+    userAgent,
+    headers: { "Content-Type": "application/json", Origin: siteBaseUrl },
+    mirrors: urlCandidates(address),
+  });
   return apiReply(response.body);
 }
 
