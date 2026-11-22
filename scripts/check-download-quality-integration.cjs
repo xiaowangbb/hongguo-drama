@@ -607,6 +607,24 @@ const checks = [
     assert.match(t.qualityNotice, /已下载更低质量.*720P.*1080P/);
     assert.equal(h.events.some(e => e.channel === 'download-failed'),false);
   }],
+  ['third-party source with non-numeric vid accepts lower measured quality instead of failing at 1080p', async () => {
+    // 第三方源 vid 带 module: 前缀，不是纯数字。修复前 allowLowerQuality 被 numeric 限制为 false，
+    // 406×720 的片源在 1080p 设置下直接报「不满足1080P，未自动降级」并让任务失败。
+    const h = fixture({ width:406, height:720 });
+    h.run(`hongguo.fetchEpisodeList = async () => ({ episodes: [{ vid: 'module:huangju:drama01:1', vid_index: 1 }] });`);
+    const extPayload = { seriesId: 'module:huangju:drama01', seriesTitle: '第三方剧',
+      episodes: [{ vid: 'module:huangju:drama01:1', vid_index: 1 }], quality: '1080p' };
+    await h.handlers['hongguo-download-batch']({}, extPayload);
+    await h.run('executeHongguoDownload(downloadTasks[0])');
+    const t = h.saved()[0];
+    assert.equal(t.status, 'completed', t.error);
+    assert.equal(t.downloadQuality, '1080p');
+    assert.equal(t.actualQuality, '406p');
+    assert.match(t.qualityNotice, /已下载更低质量.*406P.*1080P/);
+    assert.equal(h.events.some(e => e.channel === 'download-failed'), false);
+    // 降级必须传给选源层，否则低清片源在源侧就被严格过滤掉。
+    assert.equal(h.calls.every(call => call[2].allowLowerQuality === true), true);
+  }],
   ['failed higher variants exhaust all tiers, including after four addresses, before reporting an error', async () => {
     const h = fixture();
     h.run(`hongguo.fetchPlayUrlSingle = async (_vid,_sid,options) => {

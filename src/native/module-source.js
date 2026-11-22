@@ -187,6 +187,9 @@ function toSeries(source, drama) {
     series_id: encodeSeries(source.id, raw),
     series_title: title,
     cover: httpUrl(drama.cover || drama.coverUrl),
+    // 源脚本的 detail 把剧情简介放在 intro/desc；透传为 description，
+    // NAS 导出才能写出简介.txt 与 nfo 的 <plot>，不再提示「来源暂未提供剧情简介」。
+    description: plain(drama.intro || drama.desc || drama.description),
     episode_count: Number(drama.totalEpisode || drama.episodeCount || drama.total) || 0,
     tags,
     source: `${PREFIX}:${source.id}`,
@@ -290,7 +293,9 @@ async function fetchEpisodeList(seriesId, options = {}) {
       return video;
     });
     episodes.sort((left, right) => left.vid_index - right.vid_index);
-    return { series_id: canonical, series_title: seriesTitle, cover, total: episodes.length, episodes, source: `${PREFIX}:${source.id}` };
+    return { series_id: canonical, series_title: seriesTitle, cover,
+      description: plain(drama?.intro || drama?.desc || drama?.description),
+      total: episodes.length, episodes, source: `${PREFIX}:${source.id}` };
   } catch (error) {
     throw wrapError(source, error);
   }

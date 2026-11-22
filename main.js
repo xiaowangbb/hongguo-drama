@@ -540,10 +540,14 @@ function upsertSeriesRegistry(data) {
   if (!data || !data.series_id || !Array.isArray(data.episodes) || data.episodes.length === 0) return;
   const sid = String(data.series_id);
   const idx = seriesRegistry.findIndex((s) => String(s.series_id) === sid);
+  const previous = idx >= 0 ? seriesRegistry[idx] : null;
   const entry = {
     series_id: sid,
     series_title: data.series_title || '未命名短剧',
     cover: data.cover || '',
+    // 第三方源 detail 带回的剧情简介供 NAS 导出写 简介.txt / nfo <plot>；
+    // 本次没带简介就沿用已有值，避免刷新时把好数据冲掉。
+    description: data.description || previous?.description || '',
     total: data.episodes.length,
     web_accessible_episodes: data.web_accessible_episodes ?? null,
     episodes: data.episodes.map((e) => ({
@@ -918,7 +922,11 @@ async function executeHongguoDownload(task) {
     const settings = getCurrentSettings();
     // Old and retried tasks retain their original policy, independent of new defaults.
     const quality = normalizeDownloadQuality(task.downloadQuality);
-    const allowLowerQuality = quality !== 'auto' && numeric;
+    // 片源达不到所选清晰度时允许降级并如实提示。原先这里限定了 numeric（vid 为纯数字），
+    // 只有内置红果源能降级；第三方源 vid 带 module:/xifan:/... 前缀，numeric 恒为 false，
+    // 于是 406×720 这类低清片源在 1080p 设置下被直接判失败。是否降级只取决于用户有没有
+    // 选固定清晰度，与来源无关。
+    const allowLowerQuality = quality !== 'auto';
     const notifyQuality = pixels => {
       const lower = allowLowerQuality && pixels > 0 && pixels < Number.parseInt(quality, 10);
       const notice = lower ? `正在下载更低质量片源：${pixels}P（原选 ${quality.toUpperCase()}）` : '';
@@ -950,7 +958,7 @@ async function executeHongguoDownload(task) {
     }
     // Recheck source access before reusing an existing third-party file or URL.
     const checkedPlayInfo = isExternalSourceId(String(vid))
-      ? await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id, { quality }) : null;
+      ? await hongguo.fetchPlayUrlSingle(vid, hongguoInfo?.series_id, { quality, allowLowerQuality }) : null;
     if (checkedPlayInfo && !checkedPlayInfo.url) throw new Error(checkedPlayInfo.error || '来源未开放该集');
     // Existing complete files need no additional media transfer.
     source.token.throwIfRequested();
