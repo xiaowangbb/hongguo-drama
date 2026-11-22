@@ -563,7 +563,7 @@ function Browse({ onNavigate, active = true }) {
           <div><h2>{t("发现短剧")}</h2><p className="page-description">{t("挑一部喜欢的，让故事继续。")}</p></div>
         </div>
         <div className="browse-header-right">
-          {(!mobile || mediaSources.length > 1) && <label className="source-control">{t("来源")}<select className="input-field" aria-label={t("短剧来源")} value={source} onChange={(e) => switchSource(e.target.value)}>{mediaSources.map(({ id, label }) => <option key={id} value={id}>{id.startsWith('custom:') ? label : t(label)}</option>)}</select></label>}
+          {(!mobile || mediaSources.length > 1) && <label className="source-control">{t("来源")}<select className="input-field" aria-label={t("短剧来源")} value={source} onChange={(e) => switchSource(e.target.value)}>{mediaSources.map(({ id, label }) => <option key={id} value={id}>{(id.startsWith('custom:') || id.startsWith('module:')) ? label : t(label)}</option>)}</select></label>}
           {source === 'hongguo' && <label className="source-control">{t(mobile ? '' : '目录线路')}<select className="input-field" aria-label={t("红果目录线路")} value={catalogChannel} onChange={(e) => switchCatalogChannel(e.target.value)}><option value="app">{t(mobile ? 'App目录' : 'App（快速 · 部分片单）')}</option><option value="web">{t(mobile ? '官网目录' : '官网（完整目录）')}</option></select></label>}
           {!mobile && <button className="btn btn-primary" onClick={() => onNavigate('download')}><Search size={15} />{t("搜索短剧")}</button>}
           <button className="btn btn-outline" disabled={loading || sourcesLoading || meta.cursorExpired || page !== displayedPage || !hasNextBatch} onClick={() => gotoPage(displayedPage + 1)}><RefreshCw size={15} />{t("换一批")}</button>

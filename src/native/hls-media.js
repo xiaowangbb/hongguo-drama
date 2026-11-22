@@ -5,19 +5,24 @@ const { spawn } = require('node:child_process');
 const { pipeline } = require('node:stream/promises');
 const axios = require('axios');
 const { webMediaRequestOptions } = require('./web-media-guard');
+const { fakeIpRequestOptions } = require('./local-dns');
 const { localMediaEnv } = require('./child-env');
 const diskJobs = new Set();
 const DISK_RESERVE = 512 * 1024 * 1024;
 
-async function requestHls(url, { signal, headers, useProxy = true }) {
+async function requestHls(url, { signal, headers, useProxy = true, allowFakeIp = false }) {
+  const network = allowFakeIp ? fakeIpRequestOptions(url) : webMediaRequestOptions(url);
+  // 第三方脚本来源走 fake-ip 直连：本机代理在 TUN 层接管路由，显式 proxy 反而会绕开解析结果。
   return axios({ url, method:'GET', responseType:'stream', timeout:30000,
-    ...webMediaRequestOptions(url), proxy: useProxy, signal, headers });
+    ...network, proxy: allowFakeIp ? false : useProxy, signal, headers });
 }
 
 // The bundled FFmpeg has no HTTP transport: stage guarded HLS resources on disk and allow local protocols only.
-async function remuxHls({ url, output, ffmpeg, signal, cancelToken, request = requestHls, checkAccess = () => {}, headers = {}, onProgress, tempCapacityBytes, useProxy = true }) {
+async function remuxHls({ url, output, ffmpeg, signal, cancelToken, request = requestHls, checkAccess = () => {}, headers = {}, onProgress, tempCapacityBytes, useProxy = true, allowFakeIp = false }) {
   if (!ffmpeg) throw new Error('未找到 FFmpeg，无法准备 HLS 视频');
-  webMediaRequestOptions(url);
+  // 第三方脚本来源允许本机代理的 fake-ip 解析结果，其余来源仍走公网校验。
+  const guard = value => (allowFakeIp ? fakeIpRequestOptions(value) : webMediaRequestOptions(value));
+  guard(url);
   const controller = new AbortController(), files = new Map();
   let temporary, child, failure, killed, killTimer, spaceTimer, diskJob, writer;
   let received = 0, lastProgress = 0, stagedBytes = 0, committedBytes = 0, remuxing = false;
@@ -43,7 +48,7 @@ async function remuxHls({ url, output, ffmpeg, signal, cancelToken, request = re
   signal?.addEventListener('abort', abort, { once:true }); cancelToken?.subscribe(abort);
   const deadline = setTimeout(() => fail(new Error('HLS 准备超时，请重试')), 10 * 60 * 1000);
   const stage = async (remote, playlist = false, ancestors = new Set()) => {
-    check(); webMediaRequestOptions(remote);
+    check(); guard(remote);
     if (ancestors.has(remote)) throw new Error('HLS 清单循环引用');
     if (files.has(remote)) return files.get(remote);
     if (files.size >= 10000) throw new Error('HLS 清单过大');
@@ -52,7 +57,7 @@ async function remuxHls({ url, output, ffmpeg, signal, cancelToken, request = re
     files.set(remote,local);
     let upstream;
     try {
-      upstream = await request(remote, { signal:controller.signal, headers:{...headers,'Accept-Encoding':'identity'}, useProxy });
+      upstream = await request(remote, { signal:controller.signal, headers:{...headers,'Accept-Encoding':'identity'}, useProxy, allowFakeIp });
       check();
       if (upstream.status !== 200) throw new Error('HLS 媒体请求失败或内容不完整');
       const type = String(upstream.headers['content-type'] || '');
@@ -70,7 +75,7 @@ async function remuxHls({ url, output, ffmpeg, signal, cancelToken, request = re
         if (!text.trimStart().startsWith('#EXTM3U')) throw new Error('无效 HLS 清单');
         if (/#EXTINF:/.test(text) && !/#EXT-X-ENDLIST/.test(text)) throw new Error('暂不支持未结束的直播清单');
         const base = upstream.request?.res?.responseUrl || upstream.url || remote;
-        webMediaRequestOptions(base);
+        guard(base);
         const chain = new Set([...ancestors,remote]);
         let lines = text.split(/\r?\n/);
         // Keep one highest-bandwidth rendition; final media verification enforces the requested resolution.

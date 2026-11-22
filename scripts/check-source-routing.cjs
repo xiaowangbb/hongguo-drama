@@ -9,11 +9,14 @@ function extract(name) {
   assert.ok(start >= 0, `${name} must exist`);
   return source.slice(source.slice(Math.max(0, start - 6), start) === 'async ' ? start - 6 : start, source.indexOf('\n}', start) + 2);
 }
+const identity = require('../src/native/source-identity');
+// 第三方脚本来源（module:<源>）在本检查里不参与路由，只需可判定的空实现。
+const moduleSourcesStub = { isModuleSource: () => false, assertEnabled: () => {}, labelOf: () => '' };
 const checks = [
-  ['compatibility cache and shared preparation cannot bypass source access', async () => {
-    const handlers = {};
+  ['compatibility cache and shared preparation cannot bypass source access', async () => {    const handlers = {};
     let cacheReads = 0;
-    const context = { AbortController, randomUUID, console, playbackQuality: (value = 'auto', vid = '') => {
+    const context = { AbortController, randomUUID, console, ...identity, moduleSources: moduleSourcesStub,
+      playbackQuality: (value = 'auto', vid = '') => {
       if (!['auto', '720p', '1080p'].includes(value)) throw new Error('在线播放清晰度无效，请选择自动、720p 或 1080p');
       if (value !== 'auto' && /^(xifan|hema|custom):/.test(String(vid))) throw new Error('此来源暂不支持指定在线播放清晰度，请选择自动');
       return value;
@@ -44,7 +47,8 @@ const checks = [
     for (const value of ['https://hongguoduanju.com.evil.test/', 'http://hongguoduanju.com/', 'https://user@hongguoduanju.com/', 'javascript:alert(1)']) assert.throws(() => context.sourcePageUrl(value));
   }],
   ['different sources and same-title Xifan series use different folders', () => {
-    const context = { path, createHash, sanitizeFolderName: value => value };
+    const context = { path, createHash, sanitizeFolderName: value => value, moduleSources: moduleSourcesStub };
+    vm.runInNewContext(extract('sourceFolderName'), context);
     vm.runInNewContext(extract('seriesDownloadDir'), context);
     const resolve = context.seriesDownloadDir;
     const official = resolve('/downloads', '123', '同名剧');
@@ -55,7 +59,7 @@ const checks = [
     assert.notEqual(a, resolve('/downloads', 'xifan:huabo:b', '同名剧'));
   }],
   ['queue rejects spoofed lock state before filesystem writes', async () => {
-    const context = { getCurrentSettings: () => ({}), normalizeDownloadQuality: () => 'auto',
+    const context = { getCurrentSettings: () => ({}), normalizeDownloadQuality: () => 'auto', ...identity,
       hongguo: { fetchEpisodeList: async () => ({ episodes: [{ vid: 'xifan:huabo:a:2', vid_index: 2, locked: true }] }) } };
     vm.runInNewContext(extract('enqueueEpisodes'), context);
     await assert.rejects(async () => context.enqueueEpisodes({ seriesId: 'xifan:huabo:a', seriesTitle: 'test', episodes: [{ vid: 'xifan:huabo:a:2', vid_index: 2, locked: false }] }), /锁定/);

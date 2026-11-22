@@ -8,6 +8,10 @@ function getMediaSources(settings) {
     ...BUILTIN_SOURCES.filter(source => ['reelshort', 'dramabox'].includes(source.id) ? settings.builtin_sources?.[source.id] === true
       : source.id === 'hongguo' || settings.builtin_sources?.[source.id] !== false),
     ...(settings.custom_sources || []).filter(source => source.enabled).map(source => ({ id: `custom:${source.id}`, label: source.name, custom: true })),
+    // 第三方来源脚本：默认全部关闭，设置里勾选后才参与浏览与搜索
+    ...require('./module-source').listSources()
+      .filter(source => settings.module_sources?.[source.id] === true)
+      .map(source => ({ id: `module:${source.id}`, label: source.label, scripted: true, ...(source.adult ? { adult: true } : {}) })),
   ];
 }
 

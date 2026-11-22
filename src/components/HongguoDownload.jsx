@@ -67,7 +67,7 @@ function HongguoDownload({ onNavigate, active = true }) {
   useEffect(() => { if (!active) { resolveRequest.current++; playPending.current = false; setLoading(false); pendingResolve.current = null; } }, [active]);
   useEffect(() => {
     resolveRequest.current++; pendingResolve.current = null; setLoading(false);
-    setSeriesData(current => current?.series_id?.startsWith('custom:') ? null : current);
+    setSeriesData(current => current?.series_id?.startsWith('custom:') || current?.series_id?.startsWith('module:') ? null : current);
   }, [sourceRevision]);
 
   useEffect(() => {

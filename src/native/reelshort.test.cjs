@@ -140,6 +140,9 @@ test('desktop routes catalog, search, share links and episodes to ReelShort; dow
   let enabled = false;
   const handlers = {}, main = fs.readFileSync(path.join(__dirname, '../../main.js'), 'utf8');
   const context = vm.createContext({
+    ...require('./source-identity'),
+    // 第三方脚本来源在本用例中不参与路由，仅需可判定的空实现。
+    moduleSources: { isModuleSource: () => false, assertEnabled: () => {} },
     require: name => {
       if (['./reelshort', './src/native/reelshort'].includes(name)) return api;
       throw new Error(`unexpected dependency ${name}`);

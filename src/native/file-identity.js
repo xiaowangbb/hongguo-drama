@@ -25,8 +25,10 @@ function contentHash(file, size) {
   }
 }
 
-function readFileIdentity(file, { content = true } = {}) {
-  const stat = fs.lstatSync(file, { bigint: true });
+function readFileIdentity(file, { content = true, preloadedStat = null } = {}) {
+  // Callers that already stat'ed the file can pass the result to avoid a second round-trip on
+  // network filesystems. It must come from lstatSync(file, { bigint: true }).
+  const stat = preloadedStat || fs.lstatSync(file, { bigint: true });
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('下载视频不是普通文件');
   const size = Number(stat.size);
   const identity = {
@@ -41,6 +43,10 @@ function readFileIdentity(file, { content = true } = {}) {
   return identity;
 }
 
+/**
+ * 异步版内容指纹。网络盘上「open + 三段采样读 + sha256」是若干次网络往返，
+ * 列表里一集一集地同步做会把主进程的事件循环堵住（界面转彩虹圈）。
+ */
 async function contentHashAsync(file, size) {
   if (!Number.isSafeInteger(size) || size <= 0) return '';
   const chunk = Math.min(size, SAMPLE_BYTES);
@@ -57,12 +63,13 @@ async function contentHashAsync(file, size) {
     }
     return hash.digest('hex');
   } finally {
-    await handle.close();
+    await handle.close().catch(() => {});
   }
 }
 
-async function readFileIdentityAsync(file, { content = true } = {}) {
-  const stat = await fsp.lstat(file, { bigint: true });
+// 已 lstat 过的调用方可传 preloadedStat，避免网络盘上一次额外往返。
+async function readFileIdentityAsync(file, { content = true, preloadedStat = null } = {}) {
+  const stat = preloadedStat || await fsp.lstat(file, { bigint: true });
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('下载视频不是普通文件');
   const size = Number(stat.size);
   const identity = {

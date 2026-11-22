@@ -9,6 +9,8 @@ const context = {
   ipcMain: { handle: (_name, fn) => { handler = fn; } },
   proxyStartupFallback: false,
   getCurrentSettings: () => ({}), resolveProxyConfig: () => ({ mode }),
+  // 第三方脚本来源在本检查里不参与路由，仅需可判定的空实现。
+  moduleSources: { isModuleSource: () => false, browseList: async () => ({ success: true, results: [] }) },
   require: name => ({ browseList: async options => { calls.push({ name, options }); return { success: true, results: [] }; } }),
 };
 vm.runInNewContext(source.slice(source.indexOf("ipcMain.handle('browse-list'"), source.indexOf('const normalizeSearchTitle')), context);

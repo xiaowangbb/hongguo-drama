@@ -78,7 +78,8 @@ async function check() {
   assert.match((await browseList()).error, /超时/);
 
   const browse = fs.readFileSync(path.join(root, 'src/components/Browse.jsx'), 'utf8');
-  assert.match(browse, /mediaSources\.map\(\(\{ id, label \}\) => <option key=\{id\} value=\{id\}>\{id\.startsWith\('custom:'\) \? label : t\(label\)\}<\/option>\)/);
+  // 自定义源与第三方脚本源的名称来自配置，不做翻译。
+  assert.match(browse, /mediaSources\.map\(\(\{ id, label \}\) => <option key=\{id\} value=\{id\}>\{\(id\.startsWith\('custom:'\) \|\| id\.startsWith\('module:'\)\) \? label : t\(label\)\}<\/option>\)/);
   assert.match(fs.readFileSync(path.join(root, 'src/components/mediaSourcesModel.mjs'), 'utf8'), /id: 'hema', label: '河马短剧'/);
   assert.match(browse, /西饭热播榜暂未接入/);
   // Rendered pagination is covered with the actual component in check-ui-state.cjs.
@@ -94,6 +95,7 @@ async function check() {
     proxyStartupFallback: false,
     getCurrentSettings: () => ({ proxy_enabled: false }),
     resolveProxyConfig: () => ({ mode: 'direct' }),
+    moduleSources: { isModuleSource: () => false },
     require: name => ({ browseList: options => ({ name, options }) }),
   });
   for (const source of ['hema', 'xifan', 'hongguo']) {
