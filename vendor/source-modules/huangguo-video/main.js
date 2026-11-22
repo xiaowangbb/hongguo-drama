@@ -316,8 +316,21 @@ function chapterEpisode(chapter, fallback) {
     return current;
   }
   if (typeof current === "string") {
-    return episodeIndex(current, fallback);
+    const parsed = episodeIndex(current, 0);
+    if (parsed > 0) return parsed;
   }
+  // 下载/播放链路传来的 chapter 由 module-source 的 unpackChapter 构造，
+  // 只有 {id, title, index, pageUrl}，没有 currentEpisode；且标题形如「漂亮干姐姐2」
+  // 匹配不到「第N集」正则。优先从 chapter id（...:ep-N / ...:auto-1）取集号，
+  // 再用 chapter.index（vid_index），最后才回退标题正则，否则会请求 /episodes/undefined 得到 400。
+  const id = String(chapter.id || "");
+  const idMatch = id.match(/(?:^|:)ep-(\d+)$/);
+  if (idMatch) {
+    const fromId = parseInt(idMatch[1], 10);
+    if (fromId > 0) return fromId;
+  }
+  if (/(?:^|:)auto-1$/.test(id)) return 1;
+  if (Number.isInteger(chapter.index) && chapter.index > 0) return chapter.index;
   return episodeIndex(chapter.title || "", fallback);
 }
 

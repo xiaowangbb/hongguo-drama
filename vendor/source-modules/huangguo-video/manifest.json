@@ -1,7 +1,7 @@
 {
   "id": "huangguo-video",
   "name": "黄果视频",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "黄果短剧 · 搜索 · 分类 · 热播榜（新版播放接口）",
   "runtime": "js",
   "api": 1,
