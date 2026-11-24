@@ -1,10 +1,16 @@
 # 红果短剧项目规则
 
-## 8.2 Windows SDK 接入与创作者合集发行目标（源码／发行目标）
+## 发布正常可用性硬门禁（2026-11-24）
 
-- 本轮从公开 8.1 增加 0.1 至 8.2，内部 8.2.0、桌面构建 8.2.1，目标标签 `v8.2`；当前尚未公开，最新公开正式版仍为 8.1。
-- 接入 Windows x64 SDK v5 播放取源（`resolve_cli.py` Windows `msvcrt` 文件锁兼容、`sdk-playback.js` `win32-x64/hongguo-sdk-playback.exe` 路径解析、`scripts/build-sdk-playback-win.ps1` 与 `.github/workflows/windows.yml` 打包验收）。
-- 纳入创作者合集播放恢复、当前 App V5 `preload/v1` 官方兜底与 Android 构建 SDK 隔离；待完成推送后的全平台 CI、双 Mac 重新签名／公证／装订与远端摘要核对后再统一公开。详见 `docs/release-8.2.md`。
+- 以后任何更新在上传 GitHub 前，必须先用最终包按用户正常入口实测“能打开发并正常使用”；不能只用构建成功、签名、公证、特殊参数启动或局部窗口检查代替。
+- macOS 必须从最终 DMG／App 普通双击或 LaunchServices 启动，不得依赖 `--js-flags`、`--user-data-dir` 等测试专用参数；Windows 必须有真实下载与播放，Linux 必须有最终 AppImage 启动与播放。
+- 2026-11-24 的 8.2 首个公开 Mac 包因 Electron 44.9.1 在当前 macOS 的 V8 CodeRange 初始化崩溃，普通启动即 `EXC_BREAKPOINT`。该 Release 已撤回为 Draft，Latest 恢复 8.1；修复包未通过上述硬门禁前不得重新上传或公开。
+
+## 8.2 Windows SDK 接入（2026-11-24，公开包已撤回）
+
+- 从公开 8.1 增加 0.1 至 8.2，内部 8.2.0、桌面构建 8.2.1，冻结源码 `2303f85b589417eee16e260ff341429656729617`，标签 `v8.2`、原 Release ID `456354972`；首次公开后因 Mac 普通启动失败已撤回为 Draft，23 份附件保留用于替换。
+- 接入 Windows x64 SDK v5 播放取源；Windows helper 使用无 CFG 的 PyInstaller bootloader，避免 Unicorn `longjmp` 与 Windows Control Flow Guard 冲突。
+- Windows 两集真实下载均为 `sourceProvider=sdk`，下载队列、静音播放、安装升级通过；Linux、Test 通过。Mac 首次只验证了带 `--jitless` 的测试启动，漏掉普通启动，已被用户实测否决。
 
 ## 8.1 播放取源与下载提速发行（2026-11-23）
 
