@@ -9,6 +9,7 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 
 const { sourceId, moduleFile, sab } = workerData;
 
@@ -91,6 +92,9 @@ const cryptoApi = {
   },
   md5: value => crypto.createHash('md5').update(bytesOf(value)).digest(),
   sha256: value => crypto.createHash('sha256').update(bytesOf(value)).digest(),
+  hmacSha256: (key, value) => crypto.createHmac('sha256', bytesOf(key)).update(bytesOf(value)).digest(),
+  gzip: value => zlib.gzipSync(bytesOf(value)),
+  gunzip: value => zlib.gunzipSync(bytesOf(value)),
   randomBytes: count => crypto.randomBytes(Math.max(0, Math.min(4096, Number(count) || 0))),
   aesCbcEncrypt: (key, iv, data) => {
     const cipher = crypto.createCipheriv(`aes-${bytesOf(key).length * 8}-cbc`, bytesOf(key), bytesOf(iv));
@@ -209,6 +213,10 @@ function normalizeRequest(request) {
     url: String(input.url || ''), method: String(input.method || 'GET').toUpperCase(),
     headers: input.headers && typeof input.headers === 'object' ? input.headers : null,
     body: typeof input.body === 'string' ? input.body : (input.body == null ? null : String(input.body)),
+    // 二进制请求体：脚本把密文字节转成 base64 传入，主进程按字节还原（AES 等二进制协议需要）
+    bodyBase64: input.bodyBase64 === true,
+    // 二进制响应：主进程把原始字节以 base64 返回，避免 TextDecoder 破坏密文
+    binaryResponse: input.binaryResponse === true,
     referer: input.referer ? String(input.referer) : '', userAgent: input.userAgent ? String(input.userAgent) : '',
     limit: Number(input.limit) > 0 ? Number(input.limit) : 0,
     timeoutMs: Number(input.timeoutMs) > 0 ? Number(input.timeoutMs) : 0,

@@ -114,6 +114,20 @@
       }
     },
     {
+      "id": "huangdou-video",
+      "name": "黄豆视频",
+      "version": "1.0.0",
+      "description": "黄豆短剧 · 榜单 · 搜索 · 详情 · 无会话封包取流",
+      "api": 1,
+      "adult": true,
+      "repo": "guoapp-modules/huangdou-video",
+      "tag": "v1.0.0-local",
+      "sha256": {
+        "manifest.json": "d62c8c6be9d23a69b74b672c80c0f98acf7aba8a846fc738557921a11684af22",
+        "main.js": "c379d4677e2e4ee341d288ef37d90391e5c85b142b5aa38557d9fd2b3ea670a9"
+      }
+    },
+    {
       "id": "huangju",
       "name": "剧果",
       "version": "1.0.1",

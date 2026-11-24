@@ -149,9 +149,15 @@ async function performFetch(request) {
   }
   const limit = Math.min(MAX_BODY, request.limit > 0 ? request.limit : MAX_BODY);
   const timeout = Math.min(45000, request.timeoutMs > 0 ? request.timeoutMs : 15000);
+  // 二进制请求体：body 是 base64 文本，还原为字节；axios 收到 Buffer 会按原始字节发送
+  let data = request.body == null ? undefined : request.body;
+  if (request.bodyBase64 === true && typeof data === 'string') {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data.replace(/\s+/g, ''))) throw new Error('来源请求体编码无效');
+    data = Buffer.from(data, 'base64');
+  }
   const base = {
     url, method: request.method || 'GET', headers,
-    data: request.body == null ? undefined : request.body,
+    data,
     adapter: 'http', responseType: 'arraybuffer', timeout,
     maxContentLength: limit, maxBodyLength: limit, validateStatus: () => true,
   };
@@ -177,12 +183,13 @@ async function performFetch(request) {
   const status = Number(response.status) || 0;
   const raw = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data || '');
   if (raw.length > limit) throw new Error('来源响应过大');
-  const body = decodeBody(raw, response.headers?.['content-type']);
+  // 二进制响应：直接回传 base64，绕过字符集解码（AES 密文等场景）
+  const body = request.binaryResponse === true ? raw.toString('base64') : decodeBody(raw, response.headers?.['content-type']);
   // 脚本可用 acceptStatus 声明「这些状态码我自己处理」，用于识别 401/403 后刷新授权。
   const accepted = Array.isArray(request.acceptStatus) && request.acceptStatus.includes(status);
   if (!request.anyStatus && !accepted && (status < 200 || status >= 400)) throw new Error(`来源返回 ${status || '异常'}`);
   const outHeaders = responseHeaders(response.headers);
-  return { body, url: response.request?.res?.responseUrl || url, status, headers: outHeaders };
+  return { body, url: response.request?.res?.responseUrl || url, status, headers: outHeaders, binary: request.binaryResponse === true };
 }
 
 function absoluteUrl(base, relative) {
