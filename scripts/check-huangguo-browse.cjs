@@ -45,6 +45,7 @@ function loadModule(scenario = {}) {
       if (scenario.directFail) throw new Error('来源返回 500');
       if (u.pathname.startsWith('/api/ranks/')) return { body: JSON.stringify(rankPayload), url: req.url, status: 200 };
       if (u.pathname.startsWith('/api/videos/category/')) return { body: JSON.stringify(catalogPayload), url: req.url, status: 200 };
+      if (u.pathname === '/api/videos') return { body: JSON.stringify(catalogPayload), url: req.url, status: 200 };
       if (u.pathname === '/api/search') return { body: JSON.stringify(searchPayload), url: req.url, status: 200 };
       if (/^\/api\/videos\/\d+$/.test(u.pathname)) return { body: JSON.stringify(detailPayload), url: req.url, status: 200 };
       throw new Error('来源返回 404');
@@ -84,9 +85,64 @@ check('榜单走直连 GET，不再 POST 封包网关', () => {
 
 check('分类页走直连 GET', () => {
   const { api, calls } = loadModule();
-  const result = api.catalogPage(1, 'ai-duanju');
+  const result = api.catalogPage(1, 'hg-duanju-hot');
   assert.ok(calls.some((c) => c.method === 'GET' && c.url.includes('/api/videos/category/ai-duanju')));
   assert.equal(result.items[0].title, '神瞳觉醒');
+});
+
+check('发现页提供黄国原创、短剧与漫剧共九个栏目', () => {
+  const { api } = loadModule();
+  const list = api.categories();
+  assert.equal(list.length, 9, '应有九个发现页栏目');
+  const ids = list.map((entry) => entry.id);
+  for (const id of ['hg-original-all', 'hg-original-manju', 'hg-original-duanju',
+    'hg-duanju-new', 'hg-duanju-hot', 'hg-duanju-latest',
+    'hg-manju-new', 'hg-manju-hot', 'hg-manju-latest']) {
+    assert.ok(ids.includes(id), '缺少栏目 ' + id);
+  }
+  assert.ok(api.validCategory('hg-original-all'), '全部原创应被视为有效栏目');
+  assert.ok(!api.validCategory('ai-duanju'), '旧分类 id 不应再被接受');
+});
+
+check('全部原创走 /api/videos 并带 is_original', () => {
+  const { api, calls } = loadModule();
+  api.catalogPage(1, 'hg-original-all');
+  const call = calls.find((c) => c.url.includes('/api/videos'));
+  assert.ok(call, '应请求 /api/videos');
+  assert.ok(call.url.includes('is_original=1'), '应带 is_original=1');
+  assert.ok(!call.url.includes('/category/'), '全部原创不应限定分类，否则拿不到漫剧');
+});
+
+check('原创漫剧与原创短剧按分类筛选', () => {
+  const { api, calls } = loadModule();
+  api.catalogPage(1, 'hg-original-manju');
+  assert.ok(calls.some((c) => c.url.includes('/api/videos/category/ai-manju') && c.url.includes('is_original=1')));
+  calls.length = 0;
+  api.catalogPage(1, 'hg-original-duanju');
+  assert.ok(calls.some((c) => c.url.includes('/api/videos/category/ai-duanju') && c.url.includes('is_original=1')));
+});
+
+check('最近更新／当前热播／当前推荐使用站点认可的排序', () => {
+  const { api, calls } = loadModule();
+  const expected = [
+    ['hg-duanju-new', 'new'], ['hg-duanju-hot', 'hot'], ['hg-duanju-latest', 'latest'],
+    ['hg-manju-new', 'new'], ['hg-manju-hot', 'hot'], ['hg-manju-latest', 'latest'],
+  ];
+  for (const [id, sort] of expected) {
+    calls.length = 0;
+    api.catalogPage(1, id);
+    const call = calls.find((c) => c.url.includes('/api/videos/category/'));
+    assert.ok(call, id + ' 应请求分类接口');
+    assert.ok(call.url.includes('sort=' + sort), id + ' 应使用 sort=' + sort);
+  }
+});
+
+check('分类页保留分页参数', () => {
+  const { api, calls } = loadModule();
+  api.catalogPage(3, 'hg-duanju-hot');
+  const call = calls.find((c) => c.url.includes('/api/videos/category/'));
+  assert.ok(call.url.includes('page=3'), '应带上页码');
+  assert.ok(call.url.includes('size=24'), '应带上每页条数');
 });
 
 check('搜索走直连 GET，保留分页', () => {

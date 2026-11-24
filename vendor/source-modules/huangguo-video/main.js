@@ -9,11 +9,22 @@ const edgeMaxLifetime = 600;
 const edgeSessionFailure = "黄果播放会话已失效";
 const baseMirrors = ["https://huangguoai.com", "https://thu.lbvrhyir.cc", "https://pku.xxbgwypx.cc", "https://ttvoij.ediayikma.cc", "https://thu.ediayikma.cc", "https://pku.ediayikma.cc", "https://fdu.ediayikma.cc", "https://thu.agdkczeyx.cc"];
 const mirrorDomains = ["lbvrhyir.cc", "xxbgwypx.cc", "ediayikma.cc", "agdkczeyx.cc"];
+// 发现页分类对应官网栏目：
+//   黄国原创 → /original/（全部原创、原创漫剧、原创短剧）
+//   短剧     → /ai-duanju/（最近更新、当前热播、当前推荐）
+//   漫剧     → /ai-manju/（最近更新、当前热播、精选推荐）
+// 站点的 /api/videos/category/{分类} 支持 is_original 筛选原创，
+// 但不带分类时才会混合短剧与漫剧，因此「全部原创」走 /api/videos。
 const categories = [
-  { id: "ai-duanju", name: "AI 短剧" },
-  { id: "ai-manju", name: "AI 漫剧" },
-  { id: "ai-huanlian", name: "AI 换脸" },
-  { id: "ai-mogai", name: "AI 魔改" },
+  { id: "hg-original-all", name: "黄国原创 · 全部原创", path: "original", kind: "original-all" },
+  { id: "hg-original-manju", name: "原创漫剧", path: "original/manju", kind: "original", category: "ai-manju" },
+  { id: "hg-original-duanju", name: "原创短剧", path: "original/duanju", kind: "original", category: "ai-duanju" },
+  { id: "hg-duanju-new", name: "短剧 · 最近更新", path: "ai-duanju", kind: "sorted", category: "ai-duanju", sort: "new" },
+  { id: "hg-duanju-hot", name: "短剧 · 当前热播", path: "ai-duanju", kind: "sorted", category: "ai-duanju", sort: "hot" },
+  { id: "hg-duanju-latest", name: "短剧 · 当前推荐", path: "ai-duanju", kind: "sorted", category: "ai-duanju", sort: "latest" },
+  { id: "hg-manju-new", name: "漫剧 · 最近更新", path: "ai-manju", kind: "sorted", category: "ai-manju", sort: "new" },
+  { id: "hg-manju-hot", name: "漫剧 · 当前热播", path: "ai-manju", kind: "sorted", category: "ai-manju", sort: "hot" },
+  { id: "hg-manju-latest", name: "漫剧 · 精选推荐", path: "ai-manju", kind: "sorted", category: "ai-manju", sort: "latest" },
 ];
 const rankingBoards = {
   "huangguo-hot": { name: "热播榜", path: "hot" },
@@ -512,6 +523,26 @@ function urlCandidates(raw) {
   return found.length === 0 ? [raw] : found;
 }
 
+/**
+ * 把发现页分类翻译成站点接口路径。
+ *
+ * 站点只接受三种形态，参数写错会返回「请求参数无效」：
+ *   original-all → /api/videos?is_original=1&sort=hot        （不带分类才会混合短剧与漫剧）
+ *   original     → /api/videos/category/{分类}?is_original=1&sort=hot
+ *   sorted       → /api/videos/category/{分类}?sort={排序}
+ * 站点只认 hot / new / latest 三种排序，传 popular、recommend 等一律报错。
+ */
+function categoryPath(entry, page) {
+  const size = "&size=24";
+  if (entry.kind === "original-all") {
+    return "/api/videos?is_original=1&sort=hot&page=" + page + size;
+  }
+  if (entry.kind === "original") {
+    return "/api/videos/category/" + encodeURIComponent(entry.category) + "?is_original=1&sort=hot&page=" + page + size;
+  }
+  return "/api/videos/category/" + encodeURIComponent(entry.category) + "?sort=" + encodeURIComponent(entry.sort) + "&page=" + page + size;
+}
+
 function apiReply(text) {
   let reply;
   try {
@@ -922,7 +953,7 @@ module.exports = {
     for (const entry of selected) {
       let found = [];
       try {
-        const body = api("/api/videos/category/" + encodeURIComponent(entry.id) + "?sort=hot&page=" + page + "&size=24");
+        const body = api(categoryPath(entry, page));
         found = parseCards(body, siteBaseUrl + "/", entry.name);
       } catch (error) {
         failures.push(entry.name + ": " + error.message);
