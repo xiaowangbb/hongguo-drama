@@ -4,7 +4,7 @@
 
 # 8.2 四平台正式发行
 
-8.2内部8.2.0、桌面构建8.2.1，已于2026-11-24正式公开并设Latest；双Mac、Windows x64、Linux x64 AppImage共23份附件核对通过。本轮新增Windows x64 SDK v5播放取源、无CFG helper、创作者合集播放恢复、当前 App V5 `preload/v1` 官方兜底与 Android 构建 SDK 隔离。状态见[8.2记录](release-8.2.md)。
+8.2 内部 8.2.0、桌面构建 8.2.1，已于 2026-11-24 15:56:30（Asia/Shanghai）正式公开并设 Latest。默认 V8/当前 App 官方取源优先、失败后再走 SDK，并合入 SDK 会话复用、批量取源和 macOS entitlements 修复；双 Mac、Windows、Linux、23 份附件及匿名入口通过。状态见[8.2记录](release-8.2.md)。
 
 # 8.1 上一四平台正式发行
 

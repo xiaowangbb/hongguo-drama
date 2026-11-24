@@ -7,7 +7,9 @@
 
 # 8.2 最新正式发行
 
-8.2已于2026-11-24 14:05:26（Asia/Shanghai）正式公开并设Latest，内部8.2.0、桌面构建8.2.1，冻结源码`2303f85b589417eee16e260ff341429656729617`，标签`v8.2`，Release ID `456354972`。双Mac、Windows x64、Linux x64 AppImage共23份附件；Windows 两集真实下载均为 `sourceProvider=sdk`，Linux、Test、双 Mac 公证与真实播放通过。完整回执见[8.2记录](release-8.2.md)。
+# 8.2 正式发行
+
+8.2 已于 2026-11-24 15:56:30（Asia/Shanghai）正式公开并设 Latest，内部 8.2.0、桌面构建 8.2.1，运行代码冻结 `4ef6b05`，最终源码/标签 `ea5a852`。默认改为 V8/当前 App 官方取源优先、失败后再走 SDK；双 Mac、Windows、Linux、23 份附件和匿名入口通过。GitHub Test 补跑因 Ubuntu 软件源卡住并取消，本地 604+118 项检查通过；完整边界见[8.2记录](release-8.2.md)。
 
 # 8.1 上一正式发行
 
