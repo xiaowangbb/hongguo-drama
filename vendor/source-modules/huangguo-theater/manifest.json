@@ -1,0 +1,25 @@
+{
+  "id": "huangguo-theater",
+  "name": "黄果剧场",
+  "version": "1.0.0",
+  "description": "黄果剧场官网五大排行榜（热播 / 好评 / 飙升 / 下载 / 新剧）· 搜索 · 详情 · HLS 播放",
+  "runtime": "js",
+  "api": 1,
+  "adult": true,
+  "hosts": ["huangguoai.fit", "huangguo.video", "cdn.huangguo.video"],
+  "capabilities": ["search", "rankings"],
+  "group": "huangguo",
+  "groupName": "黄果",
+  "entryName": "剧场",
+  "aliases": ["huangguo-theater", "huangguo.video", "huangguoai.fit"],
+  "baseUrl": "https://huangguoai.fit",
+  "rankings": [
+    { "id": "rank-hot", "name": "热播榜", "description": "官网 /ranking 24 小时热门短剧。" },
+    { "id": "rank-good", "name": "好评榜", "description": "官网 /ranking/good 24 小时口碑最好的短剧。" },
+    { "id": "rank-rising", "name": "飙升榜", "description": "官网 /ranking/rising 24 小时热度上涨最快的短剧。" },
+    { "id": "rank-download", "name": "下载榜", "description": "官网 /ranking/download 24 小时下载最多的短剧。" },
+    { "id": "rank-new", "name": "新剧榜", "description": "官网 /ranking/new 本周最受欢迎的新短剧。" }
+  ],
+  "browserFingerprint": true,
+  "local": true
+}

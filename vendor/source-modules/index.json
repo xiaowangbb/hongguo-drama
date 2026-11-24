@@ -114,6 +114,20 @@
       }
     },
     {
+      "id": "huangguo-theater",
+      "name": "黄果剧场",
+      "version": "1.0.0",
+      "description": "官网五大排行榜（热播/好评/飙升/下载/新剧）· 搜索 · 分集 · HLS 播放",
+      "api": 1,
+      "adult": true,
+      "repo": "guoapp-modules/huangguo-theater",
+      "tag": "v1.0.0-local",
+      "sha256": {
+        "manifest.json": "a1c6bb6b8ab985e29919bcfa68e077709f6d4c135540314bcfdd0f8e2ad180cf",
+        "main.js": "bc37b5b8d3595636dea730fcaeba8e19c79f2edecc3c5dc474ad9b30f0bec742"
+      }
+    },
+    {
       "id": "huangdou-video",
       "name": "黄豆视频",
       "version": "1.0.1",
