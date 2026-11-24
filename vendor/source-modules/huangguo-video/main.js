@@ -784,9 +784,32 @@ function edgeCall(method, path, body, contentType) {
   return apiReply(data);
 }
 
-// 参考 HGhub / HuangGuo-for-fnOS 的做法：播放地址可直接通过无会话的
-// /api/edge/request 封包取得（streams.main 优先，hevc 兜底；preview 是试看片段，
-// 绝不当正片）。这条路径无会话状态，不会因会话握手失效而报 HTTP 400。
+// 上游停用 /api/edge/request 通用网关后，播放接口同样必须直连：
+// POST /api/videos/:id/episodes/:ep/playback 直接返回 {status,msg,data}，
+// 而 GET 同一路径会落到前端 404 页面。返回体里的 streams.main/hevc 与旧封包一致。
+function playDirect(path) {
+  const failures = [];
+  for (const base of urlCandidates(siteBaseUrl)) {
+    const url = base.replace(/\/+$/, "") + path;
+    try {
+      const response = host.fetchText({
+        url,
+        method: "POST",
+        referer: siteBaseUrl + "/",
+        body: goJson({}),
+        userAgent,
+        headers: { "Content-Type": "application/json", Accept: "application/json", Origin: siteBaseUrl },
+      });
+      return apiReply(response.body);
+    } catch (error) {
+      failures.push(error.message || "请求失败");
+    }
+  }
+  throw new Error("黄果播放直连失败：" + failures[0]);
+}
+
+// 旧的封包通道（HGhub / HuangGuo-for-fnOS 同款），保留作上游网关恢复时的兜底。
+// body 必须是 base64 的 "{}"（即 "e30="），传原文会得到 HTTP 400。
 function edgeRequestSimple(method, path, body) {
   const address = siteBaseUrl + "/api/edge/request";
   // edge 网关要求封包里的 body 为 base64（fnOS/HGhub 同款）；传原文会得到 HTTP 400。
@@ -819,8 +842,12 @@ function playUrl(sourceId, episode) {
     throw new Error("黄果集数无效");
   }
   const path = "/api/videos/" + encodeURIComponent(sourceId) + "/episodes/" + episode + "/playback";
-  // 主路径：无会话封包（fnOS/HGhub 同款），避开 ECDH 会话失效导致的 400。
-  // 只有接口本身没有正片地址、或封包通道异常时，才回退到旧的 ECDH 会话路径。
+  // 主路径：直连 POST（封包网关已停用，fnOS 同款实现因此也失效）。
+  // 其次无会话封包，最后才是 ECDH 会话路径。
+  try {
+    const address = playStreamUrl(playDirect(path));
+    if (address) return address;
+  } catch (_) { /* 降级到旧封包通道 */ }
   try {
     const address = playStreamUrl(edgeRequestSimple("POST", path, "{}"));
     if (address) return address;

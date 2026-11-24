@@ -21,8 +21,10 @@ function loadModule(scenario) {
     dramaId: v => 'huangguo-video:' + v,
     chapterId: (d, c) => 'huangguo-video:' + d + ':' + c,
     fetchText(req) {
-      calls.push({ via: 'edge', method: req.method, body: req.body });
-      if (scenario.simpleThrows) throw new Error('来源返回 403');
+      const isDirect = !String(req.url).includes('/api/edge/request');
+      calls.push({ via: isDirect ? 'direct' : 'edge', method: req.method, body: req.body, url: req.url });
+      if (isDirect && scenario.directThrows) throw new Error('来源返回 503');
+      if (!isDirect && scenario.simpleThrows) throw new Error('来源返回 403');
       return { body: JSON.stringify(scenario.payload), url: req.url, status: 200, headers: {} };
     },
     fetch(req) {
@@ -69,19 +71,18 @@ const playable = main => ({ status: 1, data: { streams: { main, hevc: '', previe
 let failures = 0;
 function check(name, fn) { try { fn(); console.log('PASS ' + name); } catch (e) { failures++; console.error('FAIL ' + name + ': ' + e.message); } }
 
-check('无会话封包直接取 main 正片，不触发 ECDH 握手', () => {
-  const { result, calls } = resolve({ payload: playable(MAIN) });
-  assert.equal(calls.filter(c => c.via === 'edge').length, 1);
+check('直连 POST 取 main 正片，不触发 ECDH 握手', () => {
+  const { calls } = resolve({ payload: playable(MAIN) });
+  assert.equal(calls.filter(c => c.via === 'direct').length, 1);
+  assert.equal(calls.some(c => c.via === 'edge'), false, '封包网关已停用，不应走封包');
   assert.equal(calls.some(c => c.via === 'ecdh'), false, '不应发起 ECDH 握手');
+  assert.equal(calls[0].method, 'POST', '直连必须是 POST（GET 会落到前端 404 页面）');
 });
 
-check('封包 body 为 base64（e30= 即 {}），避免 HTTP 400', () => {
+check('直连 body 为 {} 且请求 playback 路径', () => {
   const { calls } = resolve({ payload: playable(MAIN) });
-  const req = JSON.parse(calls[0].body);
-  assert.equal(req.method, 'POST');
-  assert.equal(req.content_type, 'application/json');
-  assert.equal(req.body, 'e30=');
-  assert.match(req.path, /\/api\/videos\/7012\/episodes\/2\/playback$/);
+  assert.equal(calls[0].body, '{}');
+  assert.match(calls[0].url, /\/api\/videos\/7012\/episodes\/2\/playback$/);
 });
 
 check('main 为空时用 hevc 兜底，且绝不采用 preview 试看流', () => {
@@ -94,12 +95,24 @@ check('main 为空时用 hevc 兜底，且绝不采用 preview 试看流', () =>
 check('仅 preview 可用时不当正片采用', () => {
   const { result, calls } = resolve({ payload: { status: 1, data: { streams: { main: '', hevc: '', preview: PREVIEW } } } });
   assert.equal(String(result.url || '').includes('preview'), false);
-  assert.equal(calls.some(c => c.via === 'edge'), true, '简单封包应尝试过');
+  assert.equal(calls.some(c => c.via === 'direct'), true, '直连应尝试过');
 });
 
-check('简单封包通道异常时降级到 ECDH 会话路径', () => {
-  const { result, calls } = resolve({ simpleThrows: true, payload: playable(MAIN) });
-  assert.equal(calls[0].via, 'edge');
+check('直连失败时降级到旧封包，body 为 base64 e30=', () => {
+  const { calls } = resolve({ directThrows: true, payload: playable(MAIN) });
+  assert.equal(calls[0].via, 'direct');
+  const edgeCall = calls.find(c => c.via === 'edge');
+  assert.ok(edgeCall, '应降级到旧封包通道');
+  const req = JSON.parse(edgeCall.body);
+  assert.equal(req.method, 'POST');
+  assert.equal(req.content_type, 'application/json');
+  assert.equal(req.body, 'e30=');
+  assert.match(req.path, /\/api\/videos\/7012\/episodes\/2\/playback$/);
+  assert.equal(calls.some(c => c.via === 'ecdh'), false);
+});
+
+check('直连与封包都失败时才降级到 ECDH 会话路径', () => {
+  const { calls } = resolve({ directThrows: true, simpleThrows: true, payload: playable(MAIN) });
   assert.equal(calls.some(c => c.via === 'ecdh'), true, '应降级发起 ECDH 握手');
 });
 
