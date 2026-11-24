@@ -116,15 +116,15 @@
     {
       "id": "huangdou-video",
       "name": "黄豆视频",
-      "version": "1.0.0",
-      "description": "黄豆短剧 · 榜单 · 搜索 · 详情 · 无会话封包取流",
+      "version": "1.0.1",
+      "description": "黄豆短剧 · 榜单 · 搜索 · 详情 · 取流（二进制封包协议）",
       "api": 1,
       "adult": true,
       "repo": "guoapp-modules/huangdou-video",
-      "tag": "v1.0.0-local",
+      "tag": "v1.0.1-local",
       "sha256": {
-        "manifest.json": "d62c8c6be9d23a69b74b672c80c0f98acf7aba8a846fc738557921a11684af22",
-        "main.js": "c379d4677e2e4ee341d288ef37d90391e5c85b142b5aa38557d9fd2b3ea670a9"
+        "manifest.json": "3c3cbd0b1281f7650e285b68143a7abe6caafd75b5e58f274476ad8157b51872",
+        "main.js": "799c0d4818a04f5ec300abba502249eff495dea448b669dcc95dc034bebdf401"
       }
     },
     {

@@ -254,16 +254,28 @@ function playUrl(sourceId, episode) {
   if (!sourceIdPattern.test(sourceId) || !(episode >= 1)) throw new Error("黄豆集数无效");
   const reply = api("/drama/play", { id: sourceId, seq: String(episode) });
   const data = dataMap(reply);
-  const media = firstNonEmpty(mapString(data, "m3u8"), mapString(data, "url"), mapString(data, "play_url"), mapString(data, "playUrl"));
-  // 只认正片：preview_m3u8 是试看片段，不能当完整分集
-  if (media === "") {
-    const preview = firstNonEmpty(mapString(data, "preview_m3u8"), mapString(data, "preview_url"));
-    if (preview !== "") throw new Error("黄豆仅提供试看，未取得该集正片");
+  // 上游免费集给 m3u8（同源签名地址），付费集只给 is_preview=true 的 10 秒试看 MP4。
+  // 先把候选收齐，再只用真正的 .m3u8 正片，绝不把 preview-r*.mp4 当成分集。
+  const candidates = [mapString(data, "m3u8"), mapString(data, "url"), mapString(data, "play_url"), mapString(data, "playUrl")];
+  const lines = Array.isArray(data.lines) ? data.lines : [];
+  for (const line of lines) {
+    if (isRecord(line)) candidates.push(mapString(line, "url"));
+  }
+  const preview = firstNonEmpty(mapString(data, "preview_m3u8"), mapString(data, "preview_url"));
+  const markedPreview = data.is_preview === true || data.isPreview === true;
+  let m3u8 = "";
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const url = /^https?:\/\//i.test(candidate) ? candidate : host.resolveUrl(siteBaseUrl + "/", candidate);
+    // 正片必须是 HLS；试看 mp4（含 preview-r10.mp4）一律不算。
+    if (/\.m3u8(?:[?#]|$)/i.test(url) && !/\/preview-r\d+\.mp4/i.test(url)) { m3u8 = url; break; }
+  }
+  if (m3u8 === "") {
+    if (markedPreview || preview !== "") throw new Error("黄豆该集为付费/VIP 内容，仅提供试看，暂无正片");
+    if (candidates.some(Boolean)) throw new Error("黄豆未提供可播放的 HLS 正片地址");
     throw new Error("黄豆未提供播放地址");
   }
-  const url = /^https?:\/\//i.test(media) ? media : host.resolveUrl(siteBaseUrl + "/", media);
-  if (!/\.m3u8(?:[?#]|$)/i.test(url)) throw new Error("黄豆播放地址不是 HLS 流");
-  return url;
+  return m3u8;
 }
 
 module.exports = {

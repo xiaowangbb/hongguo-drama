@@ -132,6 +132,22 @@ function sanitize(url) {
 }
 
 // ---------- 网络 ----------
+/**
+ * 按 credentials 给请求头注入同源 Cookie。
+ * 剧果等来源的媒体地址由 CloudFront 签名 cookie 授权，凭证不在 URL 里；
+ * 仅当目标与 credentials.origin 同源时才注入，避免泄露给第三方域名。
+ * 导出为纯函数便于回归测试。
+ */
+function applyCredentialCookie(headers, url, credentials) {
+  const cookie = credentials && typeof credentials.cookie === 'string' ? credentials.cookie.trim() : '';
+  if (!cookie) return headers;
+  const origin = credentials && typeof credentials.origin === 'string' ? credentials.origin.replace(/\/+$/, '') : '';
+  let sameOrigin = false;
+  try { sameOrigin = !origin || new URL(String(url)).origin === origin; } catch { sameOrigin = false; }
+  if (sameOrigin) headers.Cookie = cookie;
+  return headers;
+}
+
 async function performFetch(request) {
   const url = String(request.url || '').trim();
   if (!/^https?:\/\//i.test(url)) throw new Error('来源地址无效');
@@ -147,6 +163,8 @@ async function performFetch(request) {
       headers[String(key)] = String(value);
     }
   }
+  // 脚本通过 credentials 声明媒体凭证（而不是自行塞 Cookie header）。
+  applyCredentialCookie(headers, url, request.credentials);
   const limit = Math.min(MAX_BODY, request.limit > 0 ? request.limit : MAX_BODY);
   const timeout = Math.min(45000, request.timeoutMs > 0 ? request.timeoutMs : 15000);
   // 二进制请求体：body 是 base64 文本，还原为字节；axios 收到 Buffer 会按原始字节发送
@@ -390,4 +408,4 @@ function disposeAll() {
   if (stateTimer) { clearTimeout(stateTimer); flushState(); }
 }
 
-module.exports = { call, hasModule, disposeSource, disposeAll, resolveModuleRoot, responseHeaders, DEFAULT_UA };
+module.exports = { call, hasModule, disposeSource, disposeAll, resolveModuleRoot, responseHeaders, applyCredentialCookie, DEFAULT_UA };
