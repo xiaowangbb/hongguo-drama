@@ -262,15 +262,35 @@ function coverMime(buffer) {
   return 'application/octet-stream';
 }
 
+// 部分来源站（如黄果剧场）的图片 CDN 会对请求头做校验：简短 UA 直接返回
+// 403，完整浏览器 UA 才能取到。这里先用简短 UA，成功就用它的结果；
+// 被拒绝时换完整 UA 重试一次，覆盖不到就如实报错。
+const COVER_UA_BASIC = 'Mozilla/5.0';
+const COVER_UA_BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+async function requestCoverBytes(value, userAgent) {
+  const response = await axios.get(value, { ...webMediaRequestOptions(value), responseType: 'arraybuffer', timeout: 10000,
+    signal: AbortSignal.timeout(10000), maxContentLength: 12 * 1024 * 1024,
+    headers: { 'User-Agent': userAgent }, validateStatus: status => status >= 200 && status < 300 });
+  return Buffer.from(response.data);
+}
+
 // 供 NAS 落盘与渲染进程封面协议共用：拿到源站封面字节并就地解密（明文原样返回）。
 // webMediaRequestOptions 负责公网地址白名单，避免自定义协议被渲染器当 SSRF 跳板。
-async function fetchDecodedCover(value) {
+// requester 仅供测试注入；默认走 axios。
+async function fetchDecodedCover(value, requester = requestCoverBytes) {
   const url = new URL(value);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('封面地址无效');
-  const response = await axios.get(url.href, { ...webMediaRequestOptions(url.href), responseType: 'arraybuffer', timeout: 10000,
-    signal: AbortSignal.timeout(10000), maxContentLength: 12 * 1024 * 1024,
-    headers: { 'User-Agent': 'Mozilla/5.0' } });
-  return decodeCoverImage(Buffer.from(response.data));
+  let bytes;
+  try {
+    bytes = await requester(url.href, COVER_UA_BASIC);
+  } catch (error) {
+    const status = error?.response?.status;
+    // 仅对「请求被拒」重试：网络故障、超时等换 UA 也不会变好，保留原始原因。
+    if (status !== 403 && status !== 406 && status !== 429) throw error;
+    bytes = await requester(url.href, COVER_UA_BROWSER);
+  }
+  return decodeCoverImage(bytes);
 }
 
 async function fetchPoster(value) {

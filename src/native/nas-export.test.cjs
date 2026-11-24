@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createCipheriv } = require('node:crypto');
-const { prepareNasExport, inspectNasEpisode, copyNasEpisode, checkNasDirectory, decodeCoverImage, coverMime } = require('./nas-export');
+const { prepareNasExport, inspectNasEpisode, copyNasEpisode, checkNasDirectory, decodeCoverImage, coverMime, fetchDecodedCover } = require('./nas-export');
 
 const seriesId = '7691228619774999999';
 const episodes = [1, 2, 3].map(index => ({
@@ -217,8 +217,49 @@ test('coverMime 按解密后魔数返回正确的图片 MIME', () => {
   assert.equal(coverMime(null), 'application/octet-stream');
 });
 
-test('prepareNasExport 保存加密封面时写出解密后的 poster', async t => {
-  const root = rootFor(t);
+test('封面被 CDN 以 403 拒绝时换完整浏览器 UA 重试', async () => {
+  // 黄果剧场等来源的图片 CDN 会对简短 UA 直接返回 403，
+  // 必须换完整浏览器 UA 才能取到封面。
+  const calls = [];
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(8, 0x22)]);
+  const requester = async (_url, userAgent) => {
+    calls.push(userAgent);
+    if (userAgent === 'Mozilla/5.0') {
+      const error = new Error('Request failed with status code 403');
+      error.response = { status: 403 };
+      throw error;
+    }
+    return jpeg;
+  };
+  const bytes = await fetchDecodedCover('https://example.invalid/cover.jpg', requester);
+  assert.equal(coverMime(bytes), 'image/jpeg');
+  assert.equal(calls.length, 2, '应先试简短 UA，被拒后再试浏览器 UA');
+  assert.match(calls[0], /^Mozilla\/5\.0$/);
+  assert.match(calls[1], /AppleWebKit/);
+});
+
+test('封面请求非拒绝类失败时不换 UA 重试', async () => {
+  let calls = 0;
+  const requester = async () => {
+    calls++;
+    const error = new Error('socket hang up');
+    error.response = { status: 500 };
+    throw error;
+  };
+  await assert.rejects(() => fetchDecodedCover('https://example.invalid/cover.jpg', requester), /socket hang up/);
+  assert.equal(calls, 1, '网络故障不应换 UA 重试');
+});
+
+test('封面请求成功时只用简短 UA，不额外请求', async () => {
+  const calls = [];
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(8, 0x22)]);
+  const requester = async (_url, userAgent) => { calls.push(userAgent); return jpeg; };
+  await fetchDecodedCover('https://example.invalid/cover.jpg', requester);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], 'Mozilla/5.0');
+});
+
+test('prepareNasExport 保存加密封面时写出解密后的 poster', async t => {  const root = rootFor(t);
   const key = Buffer.from('f5d965df75336270', 'ascii');
   const iv = Buffer.from('97b60394abc2fbe1', 'ascii');
   const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(12, 0x22)]);
