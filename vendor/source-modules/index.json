@@ -102,15 +102,15 @@
     {
       "id": "huangguo-video",
       "name": "黄果视频",
-      "version": "1.0.5",
-      "description": "黄果短剧 · 搜索 · 分类 · 热播榜（无会话封包取流）",
+      "version": "1.0.6",
+      "description": "黄果短剧 · 搜索 · 分类 · 热播榜（直连 REST API）",
       "api": 1,
       "adult": true,
       "repo": "guoapp-modules/huangguo-video",
-      "tag": "v1.0.5-local",
+      "tag": "v1.0.6-local",
       "sha256": {
-        "manifest.json": "7839e06c3fbd41c7d97c4565e702f463af9caf82dca808cb98ee34afeade4725",
-        "main.js": "6a6d4ee3a4babb1db8f8ecedf064220eafc7adafe7f8beac207a3e3e35350638"
+        "manifest.json": "c6d163a37945d44ab54bcb7251bf25a4eb11f83ed230146df52b9781cb2f9f76",
+        "main.js": "456e5a0c857aec919c5faf5ee63a32e1034d712de813d0bef8a913155588117a"
       }
     },
     {

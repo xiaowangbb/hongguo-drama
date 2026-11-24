@@ -531,10 +531,34 @@ function apiReply(text) {
   return reply.data === undefined ? null : reply.data;
 }
 
-function api(path) {
+// 上游把 /api/edge/request 通用加密网关停用了（HTTP 503 + msg「接口已停用」），
+// 改为按 front-end 的 __cloudfrontCompat 配置做路由分级：public/dynamic 路由支持
+// 直接 GET，返回体仍是 {status,msg,data}，apiReply 与下游解析无需改动。
+// 这里优先直连目标路径（主站 + 镜像逐个尝试），全部失败时才回退到旧封包网关，
+// 以便老镜像或尚未升级的后端仍能工作。
+function apiDirect(path) {
+  const failures = [];
+  for (const base of urlCandidates(siteBaseUrl)) {
+    const url = base.replace(/\/+$/, "") + path;
+    try {
+      const response = host.fetchText({
+        url,
+        method: "GET",
+        referer: siteBaseUrl + "/",
+        userAgent,
+        headers: { Accept: "application/json", Origin: siteBaseUrl },
+      });
+      return apiReply(response.body);
+    } catch (error) {
+      failures.push(error.message || "请求失败");
+    }
+  }
+  throw new Error("黄果直连接口失败：" + failures[0]);
+}
+
+function apiLegacy(path) {
   const address = siteBaseUrl + "/api/edge/request";
   const envelope = goJson({ body: "", content_type: "", method: "GET", path });
-  // 黄果 edge 网关要求 POST + application/json；发成 GET（宿主默认方法）会被判 403。
   const response = host.fetchText({
     url: address,
     method: "POST",
@@ -545,6 +569,18 @@ function api(path) {
     mirrors: urlCandidates(address),
   });
   return apiReply(response.body);
+}
+
+function api(path) {
+  try {
+    return apiDirect(path);
+  } catch (directError) {
+    try {
+      return apiLegacy(path);
+    } catch (_) {
+      throw directError;
+    }
+  }
 }
 
 function dataShapeError(message) {
