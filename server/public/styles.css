@@ -57,6 +57,8 @@ main { max-width: 1280px; min-height: 66vh; padding: 32px 36px 48px; margin: aut
 .result img { width: 54px; height: 72px; border-radius: 7px; object-fit: cover; background: #eae6df; flex-shrink: 0; }
 .result-title { display: block; font-weight: 600; overflow-wrap: anywhere; }
 .result-meta { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; font-weight: 400; }
+.result-source { display: inline-block; font-size: 11px; color: #a82c32; background: #fae9e7; border-radius: 4px; padding: 1px 6px; margin-top: 4px; font-weight: 500; }
+.source-select { max-width: 190px; }
 .pagination { display: flex; justify-content: center; align-items: center; gap: 16px; padding-top: 20px; font-size: 12px; color: var(--muted); }
 .detail-pane { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 24px; min-width: 0; }
 .detail-empty { text-align: center; padding: 76px 10px; }

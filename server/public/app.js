@@ -1,7 +1,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { token: '', session: 0, page: 1, query: '', series: null, tasks: [], selected: new Set(), merging: new Set(), timer: null, refreshing: false, downloading: false, mergePending: false, detailRequest: 0, searchRequest: 0 };
+const state = { token: '', session: 0, page: 1, query: '', source: '', series: null, tasks: [], selected: new Set(), merging: new Set(), timer: null, refreshing: false, downloading: false, mergePending: false, detailRequest: 0, searchRequest: 0 };
 const pending = new Set();
 const statusNames = { queued: '等待中', running: '进行中', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' };
 
@@ -121,6 +121,7 @@ $('login-form').addEventListener('submit', async (event) => {
     showView('search');
     $('query').focus();
     refreshTasks();
+    loadSources();
   } catch (error) {
     if (session === state.session) disconnect(safeMessage(error));
   } finally {
@@ -131,6 +132,39 @@ $('login-form').addEventListener('submit', async (event) => {
 $('logout').addEventListener('click', () => disconnect());
 for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => showView(button.dataset.view));
 document.querySelector('.brand').addEventListener('click', (event) => { event.preventDefault(); showView('search'); });
+
+/** 载入可用来源清单并填充下拉框。来源取不到时保留红果官方一项。 */
+async function loadSources() {
+  const select = $('source-select');
+  if (!select) return;
+  try {
+    const data = await api('/sources');
+    const list = Array.isArray(data.sources) ? data.sources : [];
+    select.replaceChildren();
+    for (const item of list) {
+      const option = document.createElement('option');
+      option.value = String(item.id || '');
+      option.textContent = String(item.label || item.id || '来源');
+      select.appendChild(option);
+    }
+    if (!list.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = '红果短剧';
+      select.appendChild(option);
+    }
+    select.value = state.source;
+    select.hidden = list.length < 2;
+  } catch (error) {
+    // 来源清单拿不到不影响主流程，保留红果官方搜索。
+    select.replaceChildren();
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = '红果短剧';
+    select.appendChild(option);
+    select.hidden = true;
+  }
+}
 
 async function search(page) {
   const query = $('query').value.trim();
@@ -144,10 +178,12 @@ async function search(page) {
   $('search-status').textContent = '正在搜索…';
   $('search-status').hidden = false;
   notice('');
+  const source = $('source-select') ? $('source-select').value : '';
   try {
-    const data = await api(`/search?q=${encodeURIComponent(query)}&page=${page}`);
+    const data = await api(`/search?q=${encodeURIComponent(query)}&page=${page}${source ? `&source=${encodeURIComponent(source)}` : ''}`);
     if (request !== state.searchRequest || session !== state.session) return;
     state.query = query;
+    state.source = source;
     state.page = page;
     const results = Array.isArray(data.results) ? data.results : [];
     $('results').replaceChildren();
@@ -170,7 +206,13 @@ async function search(page) {
       } catch { /* Missing covers do not block selecting a series. */ }
       const label = element('span');
       label.append(element('span', result.series_title || '未命名剧集', 'result-title'));
-      label.append(element('span', result.total ? `共 ${result.total} 集 · 查看分集` : '查看分集', 'result-meta'));
+      const meta = result.total ? `共 ${result.total} 集 · 查看分集` : '查看分集';
+      // 第三方来源的结果标注来源名，便于分辨同名剧集。
+      if (result.source && result.source.startsWith('module:')) {
+        const sourceName = $('source-select')?.selectedOptions[0]?.textContent || '';
+        label.append(element('span', sourceName || '第三方来源', 'result-source'));
+      }
+      label.append(element('span', meta, 'result-meta'));
       button.append(label);
       button.addEventListener('click', () => loadSeries(result.series_id));
       $('results').append(button);

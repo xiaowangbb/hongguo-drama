@@ -3,7 +3,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { Storage, fail, safeError, assertFields, numericId } = require('./storage.cjs');
+const { Storage, fail, safeError, assertFields, numericId, seriesId, validSeriesId } = require('./storage.cjs');
 const defaultMedia = require('./media.cjs');
 const { search: searchHongguo } = require('./search.cjs');
 const PUBLIC = path.join(__dirname, 'public');
@@ -23,10 +23,38 @@ async function body(request) {
   for await (const chunk of request) { bytes += chunk.length; if (bytes > 65536) throw fail('请求过大', 413); chunks.push(chunk); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fail('JSON 格式无效'); }
 }
-function createApp({ token, dataRoot, downloadRoot, media = defaultMedia, search = searchHongguo, autoStart = true }) {
+/**
+ * 准备第三方来源脚本的运行环境。
+ *
+ * 两件事：
+ *  1) 初始化 store —— module-source 用它存「已启用来源」与站点会话。
+ *  2) 写入启用列表 —— 桌面端由设置界面勾选，服务端没有设置界面，
+ *     改用环境变量 MODULE_SOURCES（逗号分隔的源 id）。未指定时启用全部。
+ */
+function prepareModuleSources(dataRoot) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const store = require('../src/store');
+  try { fs.mkdirSync(dataRoot, { recursive: true }); } catch (_) { /* 目录已存在 */ }
+  store.init(path.join(dataRoot, 'app-data.json'));
+  const wanted = String(process.env.MODULE_SOURCES || '').trim();
+  const sources = require('../src/native/module-source');
+  const settings = store.getSettings() || {};
+  const enabled = { ...(settings.module_sources || {}) };
+  if (wanted) {
+    const ids = new Set(wanted.split(',').map(item => item.trim()).filter(Boolean));
+    for (const source of sources.listSources()) enabled[source.id] = ids.has(source.id);
+  } else {
+    for (const source of sources.listSources()) enabled[source.id] = true;
+  }
+  store.saveSettings({ ...settings, module_sources: enabled });
+  return enabled;
+}
+
+function createApp({ token, dataRoot, downloadRoot, media = defaultMedia, search = searchHongguo, autoStart = true, folderOverrides = '' }) {
   if (typeof token !== 'string' || token.length < 32 || token.length > 256 || /\s/.test(token)) throw fail('必须配置 32 至 256 字符的 HONGGUO_TOKEN，不得含空白');
   const digest = crypto.createHash('sha256').update(`Bearer ${token}`).digest();
-  const store = new Storage(dataRoot, downloadRoot);
+  const store = new Storage(dataRoot, downloadRoot, { folderOverrides });
   let active, stopped = false, reading = 0, shuttingDown, nextDownloadAt = 0, downloadTimer;
   const controllerById = new Map();
   const authorized = request => crypto.timingSafeEqual(digest, crypto.createHash('sha256').update(String(request.headers.authorization || '')).digest());
@@ -90,6 +118,17 @@ function createApp({ token, dataRoot, downloadRoot, media = defaultMedia, search
       }
       const route = url.pathname;
       if (request.method === 'GET' && route === '/api/status') return send(200, { success: true, version: require('../package.json').version, downloadRoot: '/downloads', concurrency: 1 });
+      if (request.method === 'GET' && route === '/api/sources') {
+        // 可用来源清单：红果官方 + 已启用的第三方来源脚本。
+        const list = [{ id: '', label: '红果短剧', kind: 'builtin' }];
+        try {
+          const moduleSource = require('../src/native/module-source');
+          for (const source of moduleSource.listSources()) {
+            if (moduleSource.isEnabled(source.id)) list.push({ id: `module:${source.id}`, label: source.label || source.id, kind: 'module' });
+          }
+        } catch (_) { /* 来源清单不可用时只返回红果官方 */ }
+        return send(200, { success: true, sources: list });
+      }
       if (request.method === 'GET' && route === '/api/tasks') {
         store.checkRoot(); store.reconcileCompleted();
         return send(200, { success: true, tasks: store.tasks.map(task => store.publicTask(task)).reverse() });
@@ -101,11 +140,11 @@ function createApp({ token, dataRoot, downloadRoot, media = defaultMedia, search
           if (route === '/api/search') {
             const q = (url.searchParams.get('q') || '').trim(), page = Number(url.searchParams.get('page') || 1);
             if (!q || q.length > 200 || !Number.isInteger(page) || page < 1 || page > 50) throw fail('搜索词或页码无效');
-            const result = await search(q, { page, retries: 1, deadline: Date.now() + 20000 });
-            const results = (result.results || []).filter(item => /^\d{1,30}$/.test(String(item.series_id))).map(item => ({ series_id: String(item.series_id), series_title: String(item.series_title || ''), cover: String(item.cover || ''), total: item.total }));
+            const result = await search(q, { page, retries: 1, deadline: Date.now() + 20000, source: url.searchParams.get('source') || '' });
+            const results = (result.results || []).filter(item => validSeriesId(item.series_id)).map(item => ({ series_id: String(item.series_id), series_title: String(item.series_title || ''), cover: String(item.cover || ''), total: item.total, source: String(item.source || '') }));
             return send(200, { success: true, results, page, hasMore: result.hasMore === true || result.has_more === true });
           }
-          return send(200, { success: true, series: await media.series(numericId(route.split('/').pop())) });
+          return send(200, { success: true, series: await media.series(seriesId(decodeURIComponent(route.split('/').pop()))) });
         } finally { reading--; }
       }
       const fileRoute = /^\/api\/files\/([a-f0-9-]{36})$/.exec(route);
@@ -121,9 +160,9 @@ function createApp({ token, dataRoot, downloadRoot, media = defaultMedia, search
       if (request.method !== 'POST') throw fail('接口不存在', 404);
       const payload = await body(request);
       if (route === '/api/downloads') {
-        assertFields(payload, ['seriesId', 'episodeIds', 'quality']); numericId(payload.seriesId);
+        assertFields(payload, ['seriesId', 'episodeIds', 'quality']); seriesId(payload.seriesId);
         store.checkRoot();
-        if (!Array.isArray(payload.episodeIds) || !payload.episodeIds.length || payload.episodeIds.length > 1000 || payload.episodeIds.some(id => typeof id !== 'string' || !/^\d{1,30}$/.test(id)) || new Set(payload.episodeIds).size !== payload.episodeIds.length) throw fail('请选择有效且不重复的分集');
+        if (!Array.isArray(payload.episodeIds) || !payload.episodeIds.length || payload.episodeIds.length > 1000 || payload.episodeIds.some(id => !validSeriesId(id)) || new Set(payload.episodeIds).size !== payload.episodeIds.length) throw fail('请选择有效且不重复的分集');
         const quality = payload.quality || 'auto'; if (!['auto', '720p', '1080p'].includes(quality)) throw fail('画质无效');
         if (reading >= 2) throw fail('上游查询繁忙，请稍后重试', 429);
         let detail; reading++; try { detail = await media.series(payload.seriesId); } finally { reading--; }
@@ -203,7 +242,17 @@ function createApp({ token, dataRoot, downloadRoot, media = defaultMedia, search
 }
 if (require.main === module) {
   try {
-    const app = createApp({ token: process.env.HONGGUO_TOKEN, dataRoot: process.env.DATA_DIR || '/data', downloadRoot: process.env.DOWNLOAD_DIR || '/downloads' });
+    const dataRoot = process.env.DATA_DIR || '/data';
+    // 第三方来源脚本需要 store 提供「已启用来源」列表；桌面端由设置界面写入，
+    // 服务端没有设置界面，改用环境变量 MODULE_SOURCES 指定启用的源（逗号分隔）。
+    // 不指定时启用全部，避免用户还要先在别处配置才能用。
+    prepareModuleSources(dataRoot);
+    const app = createApp({
+      token: process.env.HONGGUO_TOKEN,
+      dataRoot,
+      downloadRoot: process.env.DOWNLOAD_DIR || '/downloads',
+      folderOverrides: process.env.SOURCE_FOLDERS || '',
+    });
     const port = Number(process.env.PORT || 3000);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw fail('端口无效');
     app.server.listen(port, process.env.HOST || '0.0.0.0', () => console.log(`Hongguo Web listening on port ${port}`));
@@ -211,4 +260,4 @@ if (require.main === module) {
     for (const event of ['SIGTERM', 'SIGINT']) process.once(event, () => { app.close().then(() => process.exit(0), () => process.exit(1)); });
   } catch (error) { console.error(safeError(error)); process.exitCode = 1; }
 }
-module.exports = { createApp, makeTask };
+module.exports = { createApp, makeTask, prepareModuleSources };

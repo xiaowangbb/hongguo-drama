@@ -6,11 +6,13 @@ const { Transform } = require('node:stream');
 const axios = require('axios');
 const hongguo = require('../src/native/hongguo');
 const { webMediaRequestOptions } = require('../src/native/web-media-guard');
+const { fakeIpRequestOptions } = require('../src/native/local-dns');
+const { remuxHls } = require('../src/native/hls-media');
 const { meetsDownloadQuality } = require('../src/native/download-quality');
 const { readMergeInfo } = require('../src/native/merge-plan');
 const { runMerge, stopMergeChildren, publishMergedOutput } = require('../src/native/merge-runner');
 const { convertBytevc2 } = require('../src/native/bytevc2');
-const { fail, numericId } = require('./storage.cjs');
+const { fail, seriesId } = require('./storage.cjs');
 const { throwIfAborted } = require('../src/native/request-signal');
 const { localMediaEnv } = require('../src/native/child-env');
 const MAX_BYTES = 1024 * 1024 * 1024;
@@ -34,20 +36,39 @@ async function verify(file, quality, signal, expectedDuration = 0) {
   if (result.stderr.trim()) throw fail('视频解码检查失败');
   return info;
 }
-function mediaGuard(value) {
+// 下载期的域名白名单。红果官方走固定白名单；
+// 第三方来源各自用不同的 CDN，且实际取流域名不在来源脚本的 manifest.hosts 里
+// （那里写的是站点域名，不是 CDN 域名），因此改用通用的公网地址校验
+// （fakeIpRequestOptions）——它同样拒绝私网地址，只是不限域名。
+const OFFICIAL_CDN = ['qznovelvod.com', 'fqnovelvod.com', 'douyinvod.com', 'bytecdn.cn', 'bytecdn.com', 'ibytedtos.com', 'bdcgslb.com'];
+
+function mediaGuard(value, domains = OFFICIAL_CDN) {
   const url = new URL(value);
-  const domains = ['qznovelvod.com', 'fqnovelvod.com', 'douyinvod.com', 'bytecdn.cn', 'bytecdn.com', 'ibytedtos.com', 'bdcgslb.com'];
-  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || !domains.some(domain => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) throw fail('片源不属于允许的官方 HTTPS CDN');
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || !domains.some(domain => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) throw fail('片源不属于允许的 HTTPS CDN');
   const guarded = webMediaRequestOptions(value);
   const redirect = guarded.beforeRedirect;
-  return { ...guarded, proxy: false, beforeRedirect(options, response, request) { mediaGuard(new URL(response.headers.location, request.url).href); redirect(options, response, request); } };
+  return { ...guarded, proxy: false, beforeRedirect(options, response, request) { mediaGuard(new URL(response.headers.location, request.url).href, domains); redirect(options, response, request); } };
+}
+
+/** 第三方来源的取流地址：只校验指向公网，不限域名。 */
+function openMediaGuard(value) {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.username || url.password) throw fail('片源地址无效');
+  const guarded = fakeIpRequestOptions(value);
+  const redirect = guarded.beforeRedirect;
+  return { ...guarded, proxy: false, beforeRedirect(options, response, request) { openMediaGuard(new URL(response.headers.location, request.url).href); redirect(options, response, request); } };
+}
+
+/** 按剧集来源挑选下载期的地址校验方式。 */
+function guardFor(seriesId, value) {
+  return String(seriesId || '').startsWith('module:') ? openMediaGuard(value) : mediaGuard(value);
 }
 async function series(id) {
-  const result = await hongguo.fetchEpisodeList(numericId(id), { deadline: Date.now() + 25000 });
+  const result = await hongguo.fetchEpisodeList(seriesId(id), { deadline: Date.now() + 25000 });
   const seen = new Set();
   if (String(result.series_id) !== id || !Array.isArray(result.episodes) || !result.episodes.length || result.episodes.length > 1000) throw fail('剧集目录无效', 502);
   const episodes = result.episodes.map((episode, index) => {
-    const vid = numericId(String(episode.vid));
+    const vid = seriesId(String(episode.vid));
     if (seen.has(vid) || Number(episode.vid_index) !== index + 1 || episode.series_id && String(episode.series_id) !== id || episode.locked) throw fail('分集身份、编号或权限校验失败', 502);
     seen.add(vid); return { vid, vid_index: index + 1, title: String(episode.title || '') };
   });
@@ -67,9 +88,26 @@ async function download(task, store, signal, update) {
   const work = fs.mkdtempSync(path.join(store.directory(task), '.download-'));
   const input = path.join(work, 'input.mp4'), output = path.join(work, 'output.mp4');
   try {
+    // HLS（m3u8）片源交给 ffmpeg 拉流转封装；直链 mp4 走原来的流式下载。
+    if (info.format === 'hls' || /\.m3u8(\?|$)/i.test(String(info.url || ''))) {
+      await remuxHls({
+        url: info.url, output, ffmpeg: tools.ffmpeg, signal,
+        headers: { 'User-Agent': info.userAgent || hongguo.UA, ...(info.referer ? { Referer: info.referer } : {}) },
+        allowFakeIp: String(task.seriesId || '').startsWith('module:'),
+        useProxy: false,
+        tempCapacityBytes: MAX_BYTES,
+        onProgress: ratio => update(Math.min(90, Math.floor(ratio * 90))),
+      });
+      update(96);
+      const actualHls = await verify(output, task.quality, signal, 0);
+      if (info.width && info.height && (actualHls.w !== Number(info.width) || actualHls.h !== Number(info.height))) throw fail('实际画面尺寸与片源不一致');
+      signal.throwIfAborted();
+      publishMergedOutput(output, destination);
+      return;
+    }
     let response;
     try {
-      response = await axios.get(info.url, { ...mediaGuard(info.url), responseType: 'stream', timeout: 60000, signal,
+      response = await axios.get(info.url, { ...guardFor(task.seriesId, info.url), responseType: 'stream', timeout: 60000, signal,
         headers: { 'User-Agent': info.userAgent || hongguo.UA, 'Accept-Encoding': 'identity', ...(info.referer ? { Referer: info.referer } : {}) } });
     } catch (error) {
       // Non-2xx stream responses are rejected with the unconsumed stream still open; destroy it before rethrowing.
@@ -118,4 +156,4 @@ async function merge(task, store, signal, update) {
     publishMergedOutput(job.output, output);
   } finally { signal.removeEventListener('abort', abort); fs.rmSync(staging, { recursive: true, force: true }); }
 }
-module.exports = { series, download, merge, verify, mediaGuard, tools };
+module.exports = { series, download, merge, verify, mediaGuard, guardFor, openMediaGuard, tools };
