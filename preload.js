@@ -20,12 +20,13 @@ function wrapCovers(value) {
   }
   return value;
 }
-// 保留 ipcRenderer.invoke(...) 的调用文本，仅替换实现：其余方法（on/removeListener/send）原样透传。
+// 保留 ipcRenderer.invoke(...) 的调用文本，仅替换实现：其余方法（on/removeListener/send）惰性透传。
+// 惰性取值避免加载期就访问 mock 中可能不存在的方法（部分测试 stub 只提供 invoke）。
 const ipcRenderer = {
   invoke: async (channel, ...args) => wrapCovers(await rawIpcRenderer.invoke(channel, ...args)),
-  on: rawIpcRenderer.on.bind(rawIpcRenderer),
-  removeListener: rawIpcRenderer.removeListener.bind(rawIpcRenderer),
-  send: rawIpcRenderer.send.bind(rawIpcRenderer),
+  on: (...args) => rawIpcRenderer.on.apply(rawIpcRenderer, args),
+  removeListener: (...args) => rawIpcRenderer.removeListener.apply(rawIpcRenderer, args),
+  send: (...args) => rawIpcRenderer.send.apply(rawIpcRenderer, args),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', {
