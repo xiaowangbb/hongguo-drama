@@ -6,7 +6,7 @@ const vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../main.js'),'utf8');
 const slice=(from,to)=>{const start=source.indexOf(from),end=source.indexOf(to,start);assert.ok(start>0&&end>start);return source.slice(start,end);};
 const naming=[
- slice('function sanitizeFolderName(', '// 按命名模板渲染文件名'),
+ slice('const NAME_MAX_BYTES', '// 按命名模板渲染文件名'),
  slice('function playbackQuality(', 'function onlineCacheKey('),
  slice('function compatSeriesStem(', 'function compatFileName('),
  slice('function compatFileName(', 'function compatCacheStatus('),
@@ -20,7 +20,7 @@ const forgetBody=slice("ipcMain.handle('forget-series'", "ipcMain.handle('purge-
  let handler;
  const sessions=new Map([['own',{seriesId:'1'}],['other',{seriesId:'2'}]]),cache=new Map([['own',{seriesId:'1'}],['other',{seriesId:'2'}]]);
  const jobs=new Map();
- const ctx={require,...require('../src/native/source-identity'),fs,fsp:fs.promises,path,console,createHash:require('node:crypto').createHash,onlineSessions:sessions,onlineCache:cache,seriesRegistry:[{series_id:'1',episodes:[{vid_index:5}]},{series_id:'2',episodes:[{vid_index:1}]}],compatPreparing:jobs,getCompatDir:()=>cacheDir,releaseOnlineSession:id=>sessions.delete(id),deleteOnlineCacheEntry:key=>cache.delete(key),isFileInUse:file=>path.basename(file).startsWith('1_003'),store:{saveSeries(value){ctx.seriesRegistry=value;}},ipcMain:{handle:(_channel,fn)=>handler=fn}};
+ const ctx={require,...require('../src/native/source-identity'),fs,fsp:fs.promises,path,console,Buffer,createHash:require('node:crypto').createHash,onlineSessions:sessions,onlineCache:cache,seriesRegistry:[{series_id:'1',episodes:[{vid_index:5}]},{series_id:'2',episodes:[{vid_index:1}]}],compatPreparing:jobs,getCompatDir:()=>cacheDir,releaseOnlineSession:id=>sessions.delete(id),deleteOnlineCacheEntry:key=>cache.delete(key),isFileInUse:file=>path.basename(file).startsWith('1_003'),store:{saveSeries(value){ctx.seriesRegistry=value;}},ipcMain:{handle:(_channel,fn)=>handler=fn}};
  vm.createContext(ctx);vm.runInContext(`${naming}\n${clearBody}\n${forgetBody}`,ctx);
  for(const index of [2,3])fs.writeFileSync(ctx.compatPathFor('1',index,index===3?'1080p':'auto'),'old');
  fs.writeFileSync(ctx.compatPathFor('1',2,'auto')+'.part','partial');

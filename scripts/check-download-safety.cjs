@@ -1273,9 +1273,32 @@ async function crashedTemporary(overrides = {}) {
     assert.equal(name('LPT9.dat'), '_LPT9.dat');
     assert.equal(name('ok.'), 'ok');
     assert.equal(name('concert'), 'concert');
+    // 目录名现在按 UTF-8 字节收敛（emoji 4 字节/个），既不超过字节预算也不会切半个字符。
     const emoji = '😀'.repeat(81);
-    assert.equal(Array.from(name(emoji)).length, 80);
+    const clipped = name(emoji);
+    assert.ok(Buffer.byteLength(clipped, 'utf8') <= 200, '目录名应受字节上限约束');
+    assert.equal(clipped, '😀'.repeat(Array.from(clipped).length), 'emoji 必须整体保留');
+    assert.ok(Array.from(clipped).length === 50, '200 字节应保留 50 个 4 字节字符');
     assert.equal(name('尾部空格  '), '尾部空格');
+  });
+  await check('long episode titles are truncated by utf-8 bytes so copyfile cannot hit ENAMETOOLONG', () => {
+    const h = load(), ctx = h.context;
+    // 中文标题一个字 3 字节；按「字符数」截断后仍可能超过文件系统 255 字节上限。
+    const title = '报复结束的林天，没想到阿昊的老婆会主动找上他倾诉，'.repeat(6);
+    for (const fmt of ['集数 标题', '剧名 集数 标题', '标题']) {
+      const file = ctx.uniqueEpisodeFilename({ name_format: fmt }, '50元买断人妻', { vid_index: 4, title });
+      assert.ok(Buffer.byteLength(file, 'utf8') <= 255, `${fmt} 名字应在 255 字节内`);
+      assert.ok(file.endsWith('.mp4'), '扩展名不能被截断');
+      // 真实出错的是「最终文件 + .enc.tmp.decoded」这一族名字，临时后缀也要留出余量。
+      assert.ok(Buffer.byteLength(file + '.enc.tmp.decoded', 'utf8') <= 255, `${fmt} 加临时后缀后仍应合法`);
+      assert.ok(file.includes('004'), '集号不能被截掉');
+    }
+    // 冲突去重后缀属于不可截断的尾部。
+    const withSuffix = ctx.uniqueEpisodeFilename({ name_format: '集数 标题' }, '剧', { vid_index: 4, title, suffix: '-deadbeef' });
+    assert.ok(withSuffix.endsWith('-deadbeef.mp4'), '去重后缀必须保留');
+    assert.ok(Buffer.byteLength(withSuffix + '.enc.tmp.decoded', 'utf8') <= 255);
+    // 没超长时不应改动原有文件名。
+    assert.equal(ctx.uniqueEpisodeFilename({ name_format: '剧名 集数' }, '短剧', { vid_index: 4, title: '' }), '短剧 004.mp4');
   });
   await check('show-in-folder reveals only real files inside the download root', async () => {
     const h = load();

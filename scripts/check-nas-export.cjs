@@ -313,3 +313,13 @@ test('a copied video recovers its identity after index writing fails, without ma
   assert.equal((await nas.inspectNasEpisode(prepared.destination,series.episodes[0])).status,'existing');
   assert.equal(fs.existsSync(source),true);
 });
+
+test('NAS episode names stay inside the 255-byte limit for long Chinese titles', () => {
+  // 中文标题一字 3 字节：按字符截断挡不住 ENAMETOOLONG，必须按字节收敛并保留 SxxE 标识。
+  const long = '报复结束的林天没想到阿昊的老婆会主动找上他倾诉'.repeat(5);
+  const destination = { title: long, season: 1 };
+  const name = nas.nasEpisodeFilename(destination, { vid_index: 7 });
+  assert.ok(Buffer.byteLength(name, 'utf8') <= 255, 'NAS 文件名应在 255 字节内');
+  assert.ok(name.endsWith(' S01E007.mp4'), '季集标识必须完整保留');
+  assert.ok(nas.nasEpisodeFilename({ title: '短剧', season: 2 }, { vid_index: 3 }) === '短剧 S02E003.mp4', '未超长时保持原样');
+});

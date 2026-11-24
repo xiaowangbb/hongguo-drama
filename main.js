@@ -357,19 +357,49 @@ function getCurrentSettings() {
 // 这类来源与红果、西饭等同级参与浏览、搜索、取流；它们的 series_id / vid 以 module: 开头。
 const { EXTERNAL_SOURCE_PREFIX, isExternalSourceId, playbackSourceOf } = require('./src/native/source-identity');
 
+// 文件系统单个名字的上限是 255 字节，而中文/emoji 一个字要占 3–4 字节：
+// 按「字符数」截断在纯中文标题上仍会写出 300+ 字节的名字，于是 copyFile 抛 ENAMETOOLONG。
+// 这里统一按 UTF-8 字节数收敛，并留出临时文件后缀（.enc.tmp / .enc.tmp.decoded）的余量。
+const NAME_MAX_BYTES = 255;
+const NAME_SUFFIX_RESERVE = 32; // .mp4 + 冲突去重后缀 + .enc.tmp.decoded
+
+function truncateNameBytes(value, maxBytes) {
+  const text = String(value == null ? '' : value);
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return '';
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  // 按码位累加，避免把 emoji / 代理对切成半个字符。
+  let used = 0, out = '';
+  for (const ch of text) {
+    const size = Buffer.byteLength(ch, 'utf8');
+    if (used + size > maxBytes) break;
+    used += size;
+    out += ch;
+  }
+  return out;
+}
+
 // 净化文件夹/文件名称（移除非法字符、结尾的点和空格、Windows 保留名）
 function sanitizeFolderName(name) {
   let cleaned = String(name || '')
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
     .replace(/^ +/, '');
-  // 先按码位截断，避免把 emoji 切成半个；再去掉结尾的点或空格。
+  // 先按码位粗截断，避免把 emoji 切成半个；再按字节收敛，留给「-剧号哈希」等后缀。
   const chars = Array.from(cleaned);
   if (chars.length > 80) cleaned = chars.slice(0, 80).join('');
+  cleaned = truncateNameBytes(cleaned, 200);
   cleaned = cleaned.replace(/[. ]+$/g, '');
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(cleaned)) {
     cleaned = `_${cleaned}`.replace(/[. ]+$/g, '');
   }
   return cleaned;
+}
+
+// 把「可截断的主体」与「必须保留的尾部」拼成合法文件名：只截主体，集号等信息不被切掉。
+function fitFileName(head, tail = '', extension = '.mp4', reserve = NAME_SUFFIX_RESERVE) {
+  const suffix = `${tail}${extension}`;
+  const budget = NAME_MAX_BYTES - Buffer.byteLength(suffix, 'utf8') - Math.max(0, reserve);
+  const body = truncateNameBytes(String(head == null ? '' : head), budget).replace(/[. ]+$/g, '');
+  return `${body}${suffix}`;
 }
 
 // 按命名模板渲染文件名，返回 名称(不含扩展名) 或 null
@@ -2666,13 +2696,17 @@ function hasCompleteTaskFile(task, conflicts = null) {
 function repairTaskDestination(task) {
   const conflicts = downloadTasks.filter(other => other !== task && other.savePath === task.savePath && String(other.hongguoInfo?.vid) !== String(task.hongguoInfo?.vid));
   if (conflicts.length) for (const item of [task, ...conflicts]) item.pathConflict = true;
-  if (!task.pathConflict) return;
+  // 旧版本可能已把超长名字写进任务记录，重试时会原样复用并再次 ENAMETOOLONG；
+  // 名字本身不合法（超过 255 字节）也要走重建路径。
+  const oversized = !task.nasDestination && typeof task.savePath === 'string'
+    && path.basename(task.savePath) !== '' && Buffer.byteLength(path.basename(task.savePath), 'utf8') > NAME_MAX_BYTES;
+  if (!task.pathConflict && !oversized) return;
   if (task.nasDestination) return;
   const settings = getCurrentSettings(), info = task.hongguoInfo || {};
   task.customDir = seriesDownloadDir(settings.root || app.getPath('downloads'), info.series_id, info.series_title);
-  const filename = uniqueEpisodeFilename(settings, info.series_title, { vid_index: info.vid_index, title: info.ep_title });
-  const suffix = createHash('sha256').update(String(info.vid)).digest('hex').slice(0, 8);
-  task.filename = filename.replace(/\.mp4$/, `-${suffix}.mp4`);
+  const suffix = '-' + createHash('sha256').update(String(info.vid)).digest('hex').slice(0, 8);
+  // 去重后缀拼在截断之后，避免「本来就顶格的长标题 + 后缀」再次超过 255 字节。
+  task.filename = uniqueEpisodeFilename(settings, info.series_title, { vid_index: info.vid_index, title: info.ep_title, suffix });
   task.savePath = path.join(task.customDir, task.filename);
   if (task.directoryIdentity && path.resolve(task.customDir) !== path.resolve(task.directoryIdentity.directory)) delete task.directoryIdentity;
   task.pathConflict = false;
@@ -2682,7 +2716,10 @@ function uniqueEpisodeFilename(settings, title, episode) {
   const index = String(episode.vid_index).padStart(3, '0');
   const format = settings.name_format || '';
   const rendered = renderName(format, title, episode.vid_index, episode.title) || title;
-  return `${rendered}${/集数|vid_index/.test(format) ? '' : `_第${index}集`}.mp4`;
+  // 模板里没有集数时补上「_第N集」；这段尾部必须在截断之后拼接，否则集号会被切掉。
+  // episode.suffix（如 -a1b2c3d4）用于同集冲突去重，同样属于不可截断的尾部。
+  const tail = `${/集数|vid_index/.test(format) ? '' : `_第${index}集`}${episode.suffix || ''}`;
+  return fitFileName(rendered, tail);
 }
 
 function episodeFilePaths(file) {
@@ -3211,7 +3248,10 @@ ipcMain.handle('merge-series', async (event, seriesId, outputName, options) => {
       if (mergeTasks.some(t => t.status === 'running')) return { success: false, error: '已有合并任务正在运行，请等待完成或先取消' };
     }
     const outDir = dir || path.dirname(ordered[0].path);
-    const baseName = outputName && String(outputName).trim() ? sanitizeFolderName(outputName) : `${sanitizeFolderName(seriesTitle)}_合集`;
+    // 合集名同样受 255 字节限制，而 (2) 之类的重名后缀还要再加几个字节。
+    const baseName = outputName && String(outputName).trim()
+      ? sanitizeFolderName(outputName)
+      : truncateNameBytes(`${sanitizeFolderName(seriesTitle)}_合集`, 180);
     if (!baseName || baseName === '.' || baseName === '..') return { success: false, error: '请输入有效输出名称' };
     let output = path.join(outDir, `${baseName}.mp4`);
     for (let number = 2; fs.existsSync(output); number++) output = path.join(outDir, `${baseName} (${number}).mp4`);

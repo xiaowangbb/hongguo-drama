@@ -313,7 +313,7 @@ async function prepareOnce(destination, series, { metadataFetcher, posterFetcher
 
 async function prepareNasExport({ root, folderName, series, createFolder = false }, { metadataFetcher = fetchPublicDetails, posterFetcher = fetchPoster } = {}) {
   if (typeof root !== 'string' || !path.isAbsolute(root) || !folderName || path.basename(folderName) !== folderName ||
-      folderName.length > 255 || folderName === '.' || folderName === '..' || /[\u0000-\u001f\u007f]/.test(folderName) ||
+      Buffer.byteLength(folderName, 'utf8') > 255 || folderName === '.' || folderName === '..' || /[\u0000-\u001f\u007f]/.test(folderName) ||
       typeof createFolder !== 'boolean') throw new Error('NAS 目录或文件夹名称无效');
   root = await fsp.realpath(root);
   const parsed = seasonTitle(series.series_title);
@@ -330,12 +330,36 @@ async function prepareNasExport({ root, folderName, series, createFolder = false
   return { destination, warnings };
 }
 
+// 单个名字的上限是 255 字节，中文标题一个字占 3 字节，按字符截断挡不住 ENAMETOOLONG。
+const NAME_MAX_BYTES = 255;
+const NAME_SUFFIX_RESERVE = 32; // .mp4 / .nfo / .part 等扩展与临时后缀
+
+function truncateNameBytes(value, maxBytes) {
+  const text = String(value == null ? '' : value);
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return '';
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  let used = 0, out = '';
+  for (const ch of text) {
+    const size = Buffer.byteLength(ch, 'utf8');
+    if (used + size > maxBytes) break;
+    used += size;
+    out += ch;
+  }
+  return out;
+}
+
+// 只截可变的标题部分，「S01E001」这类季集标识保持完整。
+function fitEpisodeStem(title, tail, reserve = NAME_SUFFIX_RESERVE) {
+  const budget = NAME_MAX_BYTES - Buffer.byteLength(tail, 'utf8') - reserve;
+  return `${truncateNameBytes(title, budget).replace(/[. ]+$/g, '')}${tail}`;
+}
+
 function nasEpisodeFilename(destination, episode) {
   const index = Number(episode.vid_index);
   if (!Number.isSafeInteger(index) || index < 1 || !Number.isSafeInteger(destination.season) || destination.season < 1 ||
       !destination.title || path.basename(destination.title) !== destination.title) throw new Error('NAS 分集信息无效');
   const season = String(destination.season).padStart(2, '0');
-  return `${destination.title} S${season}E${String(index).padStart(3, '0')}.mp4`;
+  return `${fitEpisodeStem(destination.title, ` S${season}E${String(index).padStart(3, '0')}`)}.mp4`;
 }
 
 async function episodePaths(destination, episode) {
