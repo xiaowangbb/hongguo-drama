@@ -1,3 +1,49 @@
+<!-- 更新通报 / CHANGELOG（本地定制版）
+     规则：每次功能更新都在本区块最上方新增一条通报，最新置顶，历史条目依次下移。
+     每条必须写清：与主干的不同、新增功能、修复。
+     禁止写入验证数据、测试结果、本地产物路径或安装包文件名等本地敏感信息。
+     新条目统一插入在下方 INSERT 锚点的正下方。
+     基线：上游 jackotom/hongguo-drama 的 main = 7a95e93（8.2 / 8.2.0）。 -->
+
+## 更新通报 · 本地定制版（相对上游 main）
+
+> **通报规则**：与上游 README 一样，每次更新把通报放在最上边；最新的排最上面，旧的往下排。
+> **内容边界**：只写与主干的差异、新增功能与修复，不写验证数据、本地产物路径、安装包文件名等本地敏感信息。
+> **当前基线**：上游 `jackotom/hongguo-drama` `main` = `7a95e93`（8.2 / `8.2.0`）；本地分支 `merge/7.9-smb-sources`，相对基线共 **22 个定制提交**（含 v7.9、v8.2 两次上游合并）。所有上游提交均保留，可继续合并上游更新。
+> **本 fork**：`https://github.com/xiaowangbb/hongguo-drama`
+
+<!-- ▼ INSERT-NEW-ENTRY-HERE：新通报插入在此行正下方，保持最新置顶 -->
+
+### 2026-11-25 · 首次汇总：SMB 网络盘、加密封面、15 个第三方源与上游 8.2 合并
+
+**与主干的不同**：本地版 = 上游 v8.2 主线（V8-first 取源、SDK 会话复用与批量查询、创作者专辑 `content_type=1003`、Electron 44.11.5 / JIT entitlements）**＋ 22 个本地定制提交**。上游不含 SMB 网络盘专项优化、加密封面渲染、`module:` 第三方源架构，以及黄果 / 黄豆 / 剧果的协议修复。差异集中在 `main.js`、`preload.js`、`src/native/*`、`vendor/source-modules/*` 与新增的自测脚本。
+
+**新增功能**
+
+| 功能 | 说明 |
+|---|---|
+| 15 个 `module:` 源 | `vendor/source-modules/index.json` 注册：笔盒、帝果、鬼片、Hanime1、韩小圈、黑桃、红果、黄果视频、黄豆视频、剧果、爱看机器人、禁果短剧、MissAV、青空、野果；带 manifest 与 sha256 校验 |
+| 模块宿主与 worker | `src/native/module-host.js` / `module-worker.cjs` / `module-source.js`；worker 扩展 `bodyBase64`、`binaryResponse`、`hmacSha256`、`gzip`、`gunzip` |
+| 黄豆二进制封包协议 | HMAC-SHA256 签名、AES-256-CBC、gzip、requestId 派生密钥、18 镜像回退 |
+| 黄果直连 REST | `__cloudfrontCompat` / `directPublicGET`：浏览直连 GET、取流直连 POST，绕开已停用的 `/api/edge/request` |
+| 加密封面渲染 | `hongguo-cover://` 自定义协议 + AES-128-CBC/PKCS7 解密，CSP 与本地库放行，含 NAS 导出解密 |
+| NAS / SMB 专项 | `/sbin/mount` 最长前缀识别网络盘、6ms 时间切片校验、mtime 5s 容差、网络盘缓存 |
+| 同源凭证注入 | `applyCredentialCookie()` 仅在同源时注入 CloudFront 签名 cookie，脚本不能自塞 Cookie |
+| 创作者专辑兼容 | 合并冲突中同时保留 `module:` 路由与 `content_type=1003` 专辑路由 |
+
+**关键修复**
+
+| 主题 | 修复内容 |
+|---|---|
+| SMB / 下载 | 网络盘时间戳精度容差、时间切片校验去重、remux 后 `handle.sync()` 消除 ffprobe 竞态、第三方源允许低清晰度下载并携带简介 |
+| 封面 | GIF 魔数按 4 字节判断、NAS 导出解密、app 内预览渲染、preload IPC 惰性透传兼容测试 mock |
+| 黄果 | edge 网关漏 POST 导致 403、第 2 集起分集号解析 HTTP 400、ECDH 会话 400、封包网关 503（停用）→ 直连 GET/POST；移除重复的黄果AI |
+| 剧果 | `performPlaylist` 未消费 `request.credentials.cookie` → 同源注入 CloudFront cookie，修复「来源返回 403」 |
+| 黄豆 | requestId 派生 AES key 修正；VIP 集仅返回 10 秒试看 MP4，改为明确「付费/VIP 内容，仅提供试看」提示 |
+| 播放凭证 | 签名 cookie 媒体凭证透传到播放器 |
+
+---
+
 <p align="center">
   <img src="build/icon.png" alt="红果短剧桌面版图标" width="112" height="112">
 </p>
