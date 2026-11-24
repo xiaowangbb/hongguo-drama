@@ -272,6 +272,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteSeriesFiles: (seriesId, options) => ipcRenderer.invoke('delete-series-files', seriesId, options),
   deleteEpisodeFile: (seriesId, vidIndex) => ipcRenderer.invoke('delete-episode-file', seriesId, vidIndex),
   getStorageUsage: () => ipcRenderer.invoke('get-storage-usage'),
+  listOrphanTemporaries: () => ipcRenderer.invoke('list-orphan-temporaries'),
+  cleanupOrphanTemporaries: () => ipcRenderer.invoke('cleanup-orphan-temporaries'),
   deleteAllDownloaded: () => ipcRenderer.invoke('delete-all-downloaded'),
   stopDownload: (taskId) => ipcRenderer.invoke('stop-download', taskId),
   retryTask: (taskId) => ipcRenderer.invoke('retry-task', taskId),

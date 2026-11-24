@@ -1525,5 +1525,76 @@ async function crashedTemporary(overrides = {}) {
     const result = await h.handlers['hongguo-download-batch']({}, { seriesId: 'S', seriesTitle: 'Short', episodes: series()[0].episodes });
     assert.equal(result.success, false); assert.equal(h.run('downloadTasks.length'), 0); assert.equal(h.run('downloadQueue.length'), 0);
   });
+  await check('removing only the task record also clears the temporary directory it owns', async () => {
+    // 回执只存在任务记录里：记录一删，磁盘上的临时目录就永远认不出来，
+    // 只能一直挂在「归属无法确认」的提示里并占着空间。
+    const { h, temporary } = await crashedTemporary();
+    assert.equal(fs.existsSync(temporary.input), true);
+    const result = await h.handlers['delete-task']({}, 'one', { deleteFiles: false });
+    assert.equal(result.success, true, result.error);
+    assert.equal(result.count, 1);
+    assert.equal(h.saved().length, 0);
+    assert.ok(result.freed > 0, '应统计出被释放的字节');
+    assert.equal(fs.existsSync(temporary.input), false, '临时文件应被清理');
+    assert.equal(fs.existsSync(path.dirname(temporary.input)), false, '临时目录应被移除');
+  });
+  await check('orphan temporary directories are listed and cleaned only with a valid app marker', async () => {
+    const h = load();
+    // 真实层级是 <root>/<来源>/<剧名-哈希>/.hongguo-download-XXXXXX/；
+    // 任务记录被清空后仍要能扫到，否则孤儿目录永远没人管。
+    const seriesDir = path.join(h.dir, '红果短剧', '示例剧-abcdef123456');
+    fs.mkdirSync(seriesDir, { recursive: true });
+    const dir = path.join(seriesDir, '.hongguo-download-Abc123');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, '.hongguo-owner'), 'hongguo-download-v2:' + 'a'.repeat(32) + '\n');
+    fs.writeFileSync(path.join(dir, 'input.enc.tmp'), Buffer.alloc(2048));
+    const one = task('one', h.dir);
+    h.set('downloadTasks', [one]);
+    const listed = await h.handlers['list-orphan-temporaries']({});
+    assert.equal(listed.success, true, listed.error);
+    assert.equal(listed.items.length, 1);
+    assert.equal(listed.items[0].removable, true, listed.items[0].reason);
+    assert.equal(listed.items[0].bytes, 2048);
+    const cleaned = await h.handlers['cleanup-orphan-temporaries']({});
+    assert.equal(cleaned.success, true, cleaned.error);
+    assert.equal(cleaned.count, 1);
+    assert.equal(cleaned.freed, 2048);
+    assert.equal(fs.existsSync(dir), false);
+  });
+  await check('orphan temporary directories holding unknown files are kept', async () => {
+    const h = load();
+    const seriesDir = path.join(h.dir, '红果短剧', '示例剧-abcdef123456');
+    fs.mkdirSync(seriesDir, { recursive: true });
+    const dir = path.join(seriesDir, '.hongguo-download-Zyx987');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, '.hongguo-owner'), 'hongguo-download-v2:' + 'b'.repeat(32) + '\n');
+    fs.writeFileSync(path.join(dir, 'someone-elses-file.txt'), 'keep me');
+    const one = task('one', h.dir);
+    h.set('downloadTasks', [one]);
+    const listed = await h.handlers['list-orphan-temporaries']({});
+    assert.equal(listed.items.length, 1);
+    assert.equal(listed.items[0].removable, false, '含未知文件时不得判定为可清理');
+    const cleaned = await h.handlers['cleanup-orphan-temporaries']({});
+    assert.equal(cleaned.success, false);
+    assert.equal(fs.existsSync(path.join(dir, 'someone-elses-file.txt')), true, '未知文件必须保留');
+    assert.equal(fs.existsSync(dir), true, '目录必须保留');
+  });
+  await check('orphan directories without an app marker are never cleaned', async () => {
+    const h = load();
+    const seriesDir = path.join(h.dir, '红果短剧', '示例剧-abcdef123456');
+    fs.mkdirSync(seriesDir, { recursive: true });
+    const dir = path.join(seriesDir, '.hongguo-download-Nomark');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'input.enc.tmp'), Buffer.alloc(512));
+    const one = task('one', h.dir);
+    h.set('downloadTasks', [one]);
+    const listed = await h.handlers['list-orphan-temporaries']({});
+    assert.equal(listed.items.length, 1);
+    assert.equal(listed.items[0].removable, false, '缺少归属标记时不得判定为可清理');
+    assert.match(listed.items[0].reason, /归属标记/);
+    const cleaned = await h.handlers['cleanup-orphan-temporaries']({});
+    assert.equal(cleaned.success, false);
+    assert.equal(fs.existsSync(path.join(dir, 'input.enc.tmp')), true);
+  });
   assert.equal(failures, 0, `${failures} download safety regressions`);
 })().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(() => fs.rmSync(root, { recursive: true, force: true }));

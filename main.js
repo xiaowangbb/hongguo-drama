@@ -2741,6 +2741,86 @@ function untrackedTemporaryDirectories(directory) {
   catch (error) { return error.code === 'ENOENT' ? [] : [directory]; }
 }
 
+/**
+ * 列出「本应用自己创建、但任务记录已丢失」的临时目录，供用户在明确授权后清理。
+ *
+ * 这类目录的归属凭证（回执）原本只存在任务记录里，记录一删就再也认不出来。
+ * 但目录本身仍留有本应用专属的 v2 随机标记（`.hongguo-owner`，内容为
+ * `hongguo-download-v2:<随机UUID>`），可以据此证明它确实由本应用创建，
+ * 而不是用户或别的程序放的同名目录。
+ *
+ * 仍然保守的地方：
+ * - 目录名必须匹配 `.hongguo-download-` + 6 位字母数字；
+ * - 必须含本应用 v2 标记，且标记内容格式正确；
+ * - 目录内除标记外只能有本应用自己的临时文件名（`input.enc.tmp` / `decoded.mp4`）；
+ * - 出现任何其它文件一律不清理，交还给用户判断。
+ */
+function orphanedTemporaryDirectories() {
+  const recorded = new Set(downloadTasks.flatMap(task => taskTemporaryRecords(task).map(record => record?.directory)));
+  const roots = new Set(downloadTasks.map(task => task.savePath && path.dirname(task.savePath)).filter(Boolean));
+  // 任务记录被清空后，磁盘上的孤儿目录就没有任务可以指路了；
+  // 因此额外扫描下载根目录下的剧集目录，不能只依赖任务记录。
+  const settings = getCurrentSettings();
+  const root = (settings.root && String(settings.root).trim()) ? String(settings.root).trim() : app.getPath('downloads');
+  for (const source of ['红果短剧', 'DramaBox', 'ReelShort', '河马短剧', '西饭短剧', '第三方来源']) {
+    roots.add(path.join(root, source));
+  }
+  for (const label of new Set(moduleSources.listSources().map(source => sourceFolderName('module:' + source.id)))) {
+    roots.add(path.join(root, label));
+  }
+  const found = [];
+  const seen = new Set();
+  // 剧集目录层级固定为 <root>/<来源>/<剧名-哈希>/，只下探到这一层即可。
+  for (const base of roots) {
+    let seriesDirs = [];
+    try {
+      for (const name of fs.readdirSync(base)) {
+        const candidate = path.join(base, name);
+        try { if (fs.statSync(candidate).isDirectory()) seriesDirs.push(candidate); }
+        catch (_) { /* 目录不可读时跳过 */ }
+      }
+    } catch (_) { continue; }
+    for (const directory of seriesDirs) {
+      for (const orphan of untrackedTemporaryDirectories(directory)) {
+        if (recorded.has(orphan) || seen.has(orphan)) continue;
+        seen.add(orphan);
+        found.push(orphan);
+      }
+    }
+  }
+  return found;
+}
+
+/** 判定孤儿临时目录是否可以安全清理；不可清理的返回原因，便于如实告知用户。 */
+function inspectOrphanTemporaryDirectory(directory) {
+  const base = path.basename(directory);
+  if (!/^\.hongguo-download-[A-Za-z0-9]{6}$/.test(base)) return { removable: false, reason: '目录名不符合本应用临时目录格式' };
+  let names;
+  try { names = fs.readdirSync(directory); }
+  catch (error) { return { removable: false, reason: error.code === 'ENOENT' ? '目录已不存在' : '目录无法读取' }; }
+  const markerPath = path.join(directory, '.hongguo-owner');
+  if (!names.includes('.hongguo-owner')) return { removable: false, reason: '缺少本应用归属标记，无法确认来源' };
+  let marker = '';
+  try { marker = fs.readFileSync(markerPath, 'utf8'); }
+  catch (_) { return { removable: false, reason: '归属标记无法读取' }; }
+  if (!/^hongguo-download-v2:[A-Za-z0-9_-]{32,128}\n$/.test(marker)) return { removable: false, reason: '归属标记格式不符' };
+  const allowed = new Set(['.hongguo-owner', 'input.enc.tmp', 'decoded.mp4']);
+  const foreign = names.filter(name => !allowed.has(name));
+  if (foreign.length) return { removable: false, reason: `目录内存在其它文件（${foreign.slice(0, 3).join('、')}），已保留` };
+  const files = [];
+  let bytes = 0;
+  for (const name of names) {
+    if (name === '.hongguo-owner') continue;
+    try {
+      const stat = fs.lstatSync(path.join(directory, name));
+      if (!stat.isFile()) return { removable: false, reason: `目录内含非普通文件（${name}），已保留` };
+      files.push(path.join(directory, name));
+      bytes += stat.size;
+    } catch (_) { return { removable: false, reason: `目录内文件无法读取（${name}），已保留` }; }
+  }
+  return { removable: true, files, bytes };
+}
+
 function hasPendingTemporaries(task) {
   return taskTemporaryRecords(task).length > 0 || !!task.savePath && untrackedTemporaryDirectories(path.dirname(task.savePath)).length > 0;
 }
@@ -5300,11 +5380,27 @@ function dropTaskRecords(ids, keepFiles = false) {
   return previousTasks.length - downloadTasks.length;
 }
 
+/**
+ * 任务记录被删除前，先把它名下的临时目录收干净。
+ * 临时目录的归属凭证（回执）就存在任务记录里：记录一删，磁盘上那个目录就永远
+ * 认不出来了，只会变成「临时文件归属无法确认」的孤儿，白占空间。
+ * 这里只清理能凭回执证明属于自己的目录；无法确认的一律保留。
+ */
+async function cleanupTemporariesBeforeDrop(tasks) {
+  const list = (tasks || []).filter(task => task && !isTaskInFlight(task));
+  if (!list.length) return { count: 0, freed: 0, failed: 0, warning: undefined };
+  const result = await cleanupTaskTemporaries(list);
+  return { count: result.count, freed: result.freed, failed: result.failed, warning: result.warning };
+}
+
 async function deleteTaskRecords(taskIds, options) {
   const deleteFiles = options?.deleteFiles === true;
   let freed = 0, failed = 0, fileCount = 0, count = 0;
   let cancelledRetries = false;
   const removed = [], errors = [], warnings = [];
+  // 「仅删除记录」同样要先把任务名下的临时目录收掉：回执随记录一起消失后，
+  // 磁盘上的临时目录就再也认不出来，只能一直挂在「归属无法确认」的警告里。
+  let temporaryFreed = 0, temporaryCount = 0;
   for (const id of new Set(taskIds)) {
     const task = downloadTasks.find(item => item.id === id);
     if (!task) continue;
@@ -5326,13 +5422,20 @@ async function deleteTaskRecords(taskIds, options) {
         if (result.warning) { warnings.push(result.warning); errors.push(result.warning); }
         if (result.failed) { errors.push('部分文件删除失败，对应任务记录已保留'); continue; }
         if (result.warning) continue;
+      } else {
+        // 只删记录时也要清掉自己的临时目录，否则回执消失后目录永远无法认领。
+        const temporary = await cleanupTemporariesBeforeDrop([task]);
+        temporaryFreed += temporary.freed; temporaryCount += temporary.count; failed += temporary.failed;
+        if (temporary.warning) warnings.push(temporary.warning);
       }
       removed.push(id);
     } catch (error) { errors.push(error.message); }
   }
   try { if (removed.length || cancelledRetries) count = dropTaskRecords(removed, !deleteFiles); }
   catch (error) { errors.push(`任务记录保存失败，原记录已保留：${error.message}${cancelledRetries ? '；自动重试取消状态未保存' : ''}`); }
-  return { success: errors.length === 0, count, fileCount, freed, failed, warning: warnings.length ? [...new Set(warnings)].join('；') : undefined, error: errors.length ? [...new Set(errors)].join('；') : undefined };
+  return { success: errors.length === 0, count, fileCount, freed: freed + temporaryFreed, failed,
+    warning: warnings.length ? [...new Set(warnings)].join('；') : undefined,
+    error: errors.length ? [...new Set(errors)].join('；') : undefined };
 }
 
 ipcMain.handle('delete-task', (_event, taskId, options) => {
@@ -5553,6 +5656,62 @@ ipcMain.handle('get-storage-usage', async () => {
     const warning = temporaryWarning(unverifiedItems);
     if (warning) sendToRenderer('storage-error', { error:warning });
     return { success: true, totalBytes, totalFiles, series, unverifiedItems, unverifiedBytes, warning };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * 列出并清理「任务记录已丢失」的孤儿临时目录。
+ *
+ * 这些目录是历史遗留：任务记录被删除时，回执（归属凭证）随记录一起消失，
+ * 目录便永远认不出来，只能一直挂在「临时文件归属无法确认」的提示里并占着空间。
+ * 目录内仍留有本应用 v2 随机标记，可以证明来源，因此允许用户在明确授权后清理。
+ *
+ * 安全约束：只清理名称匹配、标记合法、且只含本应用临时文件名的目录；
+ * 任何可疑情况一律保留并在结果中说明原因。
+ */
+ipcMain.handle('list-orphan-temporaries', async () => {
+  try {
+    const items = [];
+    for (const directory of orphanedTemporaryDirectories()) {
+      const state = inspectOrphanTemporaryDirectory(directory);
+      items.push({
+        directory, removable: state.removable === true, reason: state.reason || '',
+        files: state.files?.length || 0, bytes: state.bytes || 0,
+      });
+    }
+    return { success: true, items, removable: items.filter(item => item.removable).length };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('cleanup-orphan-temporaries', async () => {
+  try {
+    let freed = 0, count = 0, failed = 0;
+    const skipped = [];
+    for (const directory of orphanedTemporaryDirectories()) {
+      const state = inspectOrphanTemporaryDirectory(directory);
+      if (!state.removable) { skipped.push({ directory, reason: state.reason }); continue; }
+      try {
+        for (const file of state.files) {
+          const stat = fs.lstatSync(file);
+          if (!stat.isFile()) throw new Error('文件类型已变化');
+          fs.unlinkSync(file);
+          freed += stat.size; count++;
+        }
+        const marker = path.join(directory, '.hongguo-owner');
+        if (fs.existsSync(marker)) fs.unlinkSync(marker);
+        fs.rmdirSync(directory);
+      } catch (error) {
+        failed++;
+        skipped.push({ directory, reason: `清理失败：${error.message}` });
+      }
+    }
+    return { success: failed === 0 && skipped.length === 0, count, freed, failed, skipped,
+      warning: skipped.length ? `${skipped.length} 个临时目录已保留，未清理` : undefined,
+      error: skipped.length ? skipped.map(item => `${path.basename(item.directory)}：${item.reason}`).join('；') : undefined };
   } catch (error) {
     return { success: false, error: error.message };
   }

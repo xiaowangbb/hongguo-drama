@@ -133,6 +133,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
   const [downloadedMap, setDownloadedMap] = useState({}); // series_id -> {completed,total}
   const [storageMap, setStorageMap] = useState({});       // series_id -> {files,bytes}
   const [storageTotal, setStorageTotal] = useState({ files: 0, bytes: 0 });
+  const [orphanInfo, setOrphanInfo] = useState({ count: 0, removable: 0, bytes: 0 });
   const [autoDelete, setAutoDelete] = useState(false);    // 看完自动删本地文件
   const [confirmAsk, setConfirmAsk] = useState(null);     // {title, message, danger, onOk}
 
@@ -512,6 +513,15 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
         setStorageTotal({ files: st.totalFiles, bytes: st.totalBytes });
       } else storageDirtyRef.current = true;
     } catch (_) { storageDirtyRef.current = true; }
+    // 任务记录丢失后残留的临时目录：只有这里能统计出它们的存在与可清理量。
+    try {
+      const orphans = await window.electronAPI.listOrphanTemporaries?.();
+      if (orphans?.success) {
+        const removable = (orphans.items || []).filter(item => item.removable);
+        setOrphanInfo({ count: (orphans.items || []).length, removable: removable.length,
+          bytes: removable.reduce((sum, item) => sum + (item.bytes || 0), 0) });
+      }
+    } catch (_) {}
   }, [refreshOnlineCacheInfo]);
 
   useEffect(() => {
@@ -2031,6 +2041,29 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
             {compatCache.files > 0 && (
               <button className="btn btn-outline btn-sm" onClick={clearCompatCache} title={t("删除转码产生的兼容格式文件")}>
                 <Trash2 size={14} />{t("清空转码缓存 (")}{t(fmtSize(compatCache.bytes))})
+              </button>
+            )}
+            {orphanInfo.removable > 0 && (
+              <button
+                className="btn btn-outline btn-sm"
+                title={t("清理任务记录已丢失的下载临时目录")}
+                onClick={() => {
+                  setConfirmAsk({
+                    title: '清理残留的下载临时文件',
+                    message: `有 ${orphanInfo.removable} 个下载临时目录已找不到对应任务记录（归属无法确认），共 ${fmtSize(orphanInfo.bytes)}。\n这些是下载中断或历史遗留的中间文件，删除不会影响已下载完成的剧集。`,
+                    okText: '清理',
+                    danger: true,
+                    onOk: async () => {
+                      const result = await window.electronAPI.cleanupOrphanTemporaries();
+                      showToast(result?.success
+                        ? `已清理 ${result.count} 个临时文件，释放 ${fmtSize(result.freed)}`
+                        : `清理未完成：${result?.error || '请重试'}`);
+                      await refreshCacheInfo();
+                    },
+                  });
+                }}
+              >
+                <Trash2 size={14} />{t("清理残留临时文件 (")}{t(orphanInfo.removable)}{t(")")}
               </button>
             )}
           </div>
