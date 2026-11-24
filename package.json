@@ -249,7 +249,7 @@
     "appImage": {
       "executableArgs": []
     },
-    "buildVersion": "7.9.1"
+    "buildVersion": "7.9.5"
   },
   "engines": {
     "node": ">=22.12"

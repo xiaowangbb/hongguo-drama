@@ -40,7 +40,7 @@ export function saveLocalSeries({ id, title, published_at, favorite, cover, like
     title: String(title).trim(),
     published_at: validPublishedAt(published_at) ? published_at : previous?.published_at ?? null,
     favorite: typeof favorite === 'boolean' ? favorite : previous?.favorite ?? false,
-    cover: typeof cover === 'string' && /^https?:\/\//i.test(cover) ? cover : previous?.cover || '',
+    cover: typeof cover === 'string' && (/^https?:\/\//i.test(cover) || /^hongguo-cover:\/\//i.test(cover)) ? cover : previous?.cover || '',
     liked_episode_ids: nextEpisodeLikeIds,
   };
   const items = [...current.items.filter(item => item.id !== seriesId), next];

@@ -10,6 +10,20 @@ const { localMediaEnv } = require('./child-env');
 const diskJobs = new Set();
 const DISK_RESERVE = 512 * 1024 * 1024;
 
+// FFmpeg 进程退出只保证数据写进内核页缓存，不等于落盘。在 SMB 等网络盘上，
+// 紧接着启动的独立 ffprobe 进程可能读到尚未同步的 moov atom，误判为「无视频轨」。
+// 退出前对输出做一次 fsync；部分网络文件系统不支持时忽略，由上层校验重试兜底。
+async function flushOutput(file) {
+  let handle;
+  try {
+    handle = await fsp.open(file, 'r');
+    await handle.sync();
+  } catch (_) { /* 不支持 fsync 的文件系统交给上层校验重试处理 */ }
+  finally {
+    if (handle) { try { await handle.close(); } catch (_) {} }
+  }
+}
+
 async function requestHls(url, { signal, headers, useProxy = true, allowFakeIp = false }) {
   const network = allowFakeIp ? fakeIpRequestOptions(url) : webMediaRequestOptions(url);
   // 第三方脚本来源走 fake-ip 直连：本机代理在 TUN 层接管路由，显式 proxy 反而会绕开解析结果。
@@ -18,7 +32,7 @@ async function requestHls(url, { signal, headers, useProxy = true, allowFakeIp =
 }
 
 // The bundled FFmpeg has no HTTP transport: stage guarded HLS resources on disk and allow local protocols only.
-async function remuxHls({ url, output, ffmpeg, signal, cancelToken, request = requestHls, checkAccess = () => {}, headers = {}, onProgress, tempCapacityBytes, useProxy = true, allowFakeIp = false }) {
+async function remuxHls({ url, output, ffmpeg, signal, cancelToken, request = requestHls, checkAccess = () => {}, headers = {}, onProgress, tempCapacityBytes, useProxy = true, allowFakeIp = false, skipFlush = false }) {
   if (!ffmpeg) throw new Error('未找到 FFmpeg，无法准备 HLS 视频');
   // 第三方脚本来源允许本机代理的 fake-ip 解析结果，其余来源仍走公网校验。
   const guard = value => (allowFakeIp ? fakeIpRequestOptions(value) : webMediaRequestOptions(value));
@@ -157,6 +171,9 @@ async function remuxHls({ url, output, ffmpeg, signal, cancelToken, request = re
     });
     check();
     if (!fs.existsSync(output) || !fs.statSync(output).size) throw new Error('HLS 没有生成有效视频');
+    // 同步落盘后再返回：SMB 网络盘上写缓存未 flush 会让紧随其后的 ffprobe 读到空轨道。
+    if (!skipFlush) await flushOutput(output);
+    check();
   } catch (error) {
     try { fs.unlinkSync(output); } catch (_) {}
     throw failure || error;

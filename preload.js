@@ -1,6 +1,32 @@
 // 红果短剧 7.9：版本及发行状态见 package.json 和 docs/release-7.9.md。
 // 红果短剧 6.2：桌面桥接入口，发行说明见 docs/release-6.0.md。
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer: rawIpcRenderer } = require('electron');
+
+// 封面走本地解密协议：部分来源（黄果等）的封面是 AES 混淆的二进制，浏览器直接
+// 请求源站会得到乱码。把 http(s) 封面包装成 hongguo-cover://，由主进程取回并解密。
+// 只在 IPC 返回值出口做递归包装，主进程内部仍保留原始 URL（落盘、导出不受影响）。
+const COVER_PREFIX = 'hongguo-cover://c/?url=';
+function wrapCover(value) {
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value)) return value;
+  return COVER_PREFIX + encodeURIComponent(value);
+}
+function wrapCovers(value) {
+  if (Array.isArray(value)) { for (let i = 0; i < value.length; i++) value[i] = wrapCovers(value[i]); return value; }
+  if (value && typeof value === 'object') {
+    for (const key of Object.keys(value)) {
+      if (key === 'cover') value[key] = wrapCover(value[key]);
+      else value[key] = wrapCovers(value[key]);
+    }
+  }
+  return value;
+}
+// 保留 ipcRenderer.invoke(...) 的调用文本，仅替换实现：其余方法（on/removeListener/send）原样透传。
+const ipcRenderer = {
+  invoke: async (channel, ...args) => wrapCovers(await rawIpcRenderer.invoke(channel, ...args)),
+  on: rawIpcRenderer.on.bind(rawIpcRenderer),
+  removeListener: rawIpcRenderer.removeListener.bind(rawIpcRenderer),
+  send: rawIpcRenderer.send.bind(rawIpcRenderer),
+};
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getPublicDetails: (seriesId, vid) => ipcRenderer.invoke('get-public-details', seriesId, vid),

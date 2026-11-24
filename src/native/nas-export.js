@@ -238,7 +238,7 @@ function isKnownImage(buffer) {
   if (buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return true;
   if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return true;
   if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return true;
-  if (buffer.length >= 6 && buffer.toString('ascii', 0, 6) === 'GIF8') return true;
+  if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'GIF8') return true;
   return false;
 }
 function decodeCoverImage(buffer) {
@@ -252,13 +252,29 @@ function decodeCoverImage(buffer) {
   return buffer;
 }
 
-async function fetchPoster(value) {
+// 供渲染进程封面协议设置 Content-Type；非已知图片返回 octet-stream，由浏览器按魔数嗅探。
+function coverMime(buffer) {
+  if (!Buffer.isBuffer(buffer)) return 'application/octet-stream';
+  if (buffer.length >= 3 && buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return 'image/jpeg';
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  if (buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'GIF8') return 'image/gif';
+  return 'application/octet-stream';
+}
+
+// 供 NAS 落盘与渲染进程封面协议共用：拿到源站封面字节并就地解密（明文原样返回）。
+// webMediaRequestOptions 负责公网地址白名单，避免自定义协议被渲染器当 SSRF 跳板。
+async function fetchDecodedCover(value) {
   const url = new URL(value);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('封面地址无效');
   const response = await axios.get(url.href, { ...webMediaRequestOptions(url.href), responseType: 'arraybuffer', timeout: 10000,
     signal: AbortSignal.timeout(10000), maxContentLength: 12 * 1024 * 1024,
     headers: { 'User-Agent': 'Mozilla/5.0' } });
-  return Buffer.from(response.data);
+  return decodeCoverImage(Buffer.from(response.data));
+}
+
+async function fetchPoster(value) {
+  return fetchDecodedCover(value);
 }
 
 async function prepareOnce(destination, series, { metadataFetcher, posterFetcher }) {
@@ -388,6 +404,6 @@ async function copyNasEpisode(task, destination) {
   return { copied, path: files.video };
 }
 
-module.exports = { prepareNasExport, inspectNasEpisode, copyNasEpisode, nasEpisodeFilename, decodeCoverImage, checkNasDirectory: directoryAt,
+module.exports = { prepareNasExport, inspectNasEpisode, copyNasEpisode, nasEpisodeFilename, decodeCoverImage, fetchDecodedCover, coverMime, checkNasDirectory: directoryAt,
   nasDirectoryIdentityCurrent: destination => directoryIdentityCurrent(destination.root, destination.rootIdentity)
     && directoryIdentityCurrent(destination.directory, destination.directoryIdentity) };

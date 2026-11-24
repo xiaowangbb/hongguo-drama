@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createCipheriv } = require('node:crypto');
-const { prepareNasExport, inspectNasEpisode, copyNasEpisode, checkNasDirectory, decodeCoverImage } = require('./nas-export');
+const { prepareNasExport, inspectNasEpisode, copyNasEpisode, checkNasDirectory, decodeCoverImage, coverMime } = require('./nas-export');
 
 const seriesId = '7691228619774999999';
 const episodes = [1, 2, 3].map(index => ({
@@ -206,6 +206,15 @@ test('decodeCoverImage 对明文图片与非图片数据保持原样', () => {
   assert.equal(decodeCoverImage(junk) === junk, true, '无法解密的数据应原样返回');
   const short = Buffer.from([1, 2, 3]);
   assert.equal(decodeCoverImage(short) === short, true, '非 16 倍数数据应原样返回');
+});
+
+test('coverMime 按解密后魔数返回正确的图片 MIME', () => {
+  assert.equal(coverMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), 'image/jpeg');
+  assert.equal(coverMime(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'image/png');
+  assert.equal(coverMime(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')])), 'image/webp');
+  assert.equal(coverMime(Buffer.from('GIF89a')), 'image/gif');
+  assert.equal(coverMime(Buffer.alloc(16, 7)), 'application/octet-stream');
+  assert.equal(coverMime(null), 'application/octet-stream');
 });
 
 test('prepareNasExport 保存加密封面时写出解密后的 poster', async t => {

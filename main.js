@@ -75,7 +75,7 @@ const { fetchPublicDetails } = require('./src/native/public-details');
 const { fetchEpisodeComments } = require('./src/native/episode-comments');
 const { fetchDanmaku, setDeviceIdentityFile } = require('./src/native/danmaku');
 const { exportSeriesText } = require('./src/native/text-export');
-const { prepareNasExport, inspectNasEpisode, copyNasEpisode, nasEpisodeFilename, checkNasDirectory, nasDirectoryIdentityCurrent } = require('./src/native/nas-export');
+const { prepareNasExport, inspectNasEpisode, copyNasEpisode, nasEpisodeFilename, checkNasDirectory, nasDirectoryIdentityCurrent, fetchDecodedCover, coverMime } = require('./src/native/nas-export');
 const mediaAccess = require('./src/native/media-access').createMediaAccess(process.env.VITE_DEV_SERVER_URL);
 const rendererSecurity = require('./src/native/renderer-security').createRendererSecurity(
   path.join(__dirname, 'dist-react', 'index.html'), process.env.VITE_DEV_SERVER_URL);
@@ -147,6 +147,9 @@ const STREAM_SCHEME = 'hongguo-stream';
 // 决定（media-src / connect-src 必须显式列出 hongguo-stream: 与 hongguo-local:）。
 // 用 bypassCSP 绕开自家 CSP 会白白丢掉一层防护，属于掩盖配置疏漏，不要再加回来。
 const LOCAL_SCHEME = 'hongguo-local';
+// 封面协议：主进程取源站封面字节并解密（黄果等来源封面是 AES 混淆的二进制），
+// 让渲染进程 <img> 能显示明文图片。真实地址只放在 query，渲染器见不到源站 Cookie 等凭据。
+const COVER_SCHEME = 'hongguo-cover';
 protocol.registerSchemesAsPrivileged([
   {
     scheme: STREAM_SCHEME,
@@ -155,6 +158,10 @@ protocol.registerSchemesAsPrivileged([
   {
     scheme: LOCAL_SCHEME,
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
+  },
+  {
+    scheme: COVER_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
   },
 ]);
 
@@ -869,8 +876,20 @@ async function verifyDownloadQuality(file, quality, existing = false, verifyDeco
   quality = normalizeDownloadQuality(quality);
   const ffprobe = resolveFfmpeg('ffprobe');
   if (!ffprobe) throw Object.assign(new Error('视频检查工具不可用，请修复安装后重试'), { code: 'LOCAL_MEDIA_TOOL_ERROR' });
-  const info = await probeVideoInfo(ffprobe, file, undefined, true);
   const prefix = existing ? '已有本地文件' : '片源文件';
+  // SMB 网络盘上 FFmpeg 刚写完的 MP4，独立 ffprobe 进程可能读到尚未 flush 的 moov atom，
+  // 首次探测返回空轨道。对非空文件做几次退避重试，避免把这类时序竞态误判成损坏文件。
+  // 真正的损坏文件每次都无效，重试只是多花约 1.5 秒，不会改变最终判定。
+  let info = null;
+  let stat = null;
+  try { stat = fs.statSync(file); } catch (_) {}
+  const probes = stat && stat.isFile() && stat.size > 0 ? 4 : 1;
+  for (let attempt = 0; attempt < probes; attempt++) {
+    if (cancelToken) cancelToken.throwIfRequested();
+    info = await probeVideoInfo(ffprobe, file, undefined, true);
+    if (info && [info.w, info.h, info.duration].every(value => Number.isFinite(value) && value > 0)) break;
+    if (attempt + 1 < probes) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+  }
   if (!info || ![info.w, info.h, info.duration].every(value => Number.isFinite(value) && value > 0)) {
     throw new Error(`${prefix}缺少有效视频轨、分辨率或时长，未完成下载${existing ? '；文件已保留，请先自行检查或移除' : ''}`);
   }
@@ -3707,6 +3726,54 @@ function registerLocalProtocol() {
   }));
 }
 
+// 封面解密缓存：同一张海报会在列表、详情、下载管理器里反复出现，按原始 URL 缓存解密后的字节。
+// 只缓存成功结果，失败不缓存以便重试；限制条数避免长会话无限增长。
+const COVER_CACHE_LIMIT = 256;
+const coverCache = new Map(); // url -> { bytes, mime }
+function coverCacheGet(url) {
+  const hit = coverCache.get(url);
+  if (hit) { coverCache.delete(url); coverCache.set(url, hit); } // LRU
+  return hit;
+}
+function coverCacheSet(url, value) {
+  if (coverCache.has(url)) coverCache.delete(url);
+  coverCache.set(url, value);
+  while (coverCache.size > COVER_CACHE_LIMIT) coverCache.delete(coverCache.keys().next().value);
+}
+
+/**
+ * 注册封面协议：渲染进程 <img src="hongguo-cover://c/?url=<encoded>">，
+ * 主进程取回源站字节 → decodeCoverImage 解密 → 返回图片。明文封面也走这里，
+ * 逻辑一致且能统一处理 auth_key 过期前的缓存。
+ */
+function registerCoverProtocol() {
+  if (typeof protocol.handle !== 'function') return; // 非 Electron 环境（如单元测试的精简 mock）跳过
+  protocol.handle(COVER_SCHEME, mediaWithCors(async (request) => {
+    try {
+      if (!['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 405 });
+      const url = new URL(request.url);
+      if (url.hostname !== 'c') return new Response('bad cover', { status: 400, headers: { 'Content-Type': 'text/plain' } });
+      const source = url.searchParams.get('url');
+      if (!source || !/^https?:\/\//i.test(source)) {
+        return new Response('bad cover url', { status: 400, headers: { 'Content-Type': 'text/plain' } });
+      }
+      let cached = coverCacheGet(source);
+      if (!cached) {
+        const bytes = await fetchDecodedCover(source);
+        cached = { bytes, mime: coverMime(bytes) };
+        coverCacheSet(source, cached);
+      }
+      return new Response(request.method === 'HEAD' ? null : new Uint8Array(cached.bytes), {
+        status: 200,
+        headers: { 'Content-Type': cached.mime, 'Cache-Control': 'public, max-age=3600' },
+      });
+    } catch (e) {
+      console.error('[Cover] 加载失败:', e.message);
+      return new Response('error', { status: 500, headers: { 'Content-Type': 'text/plain' } });
+    }
+  }));
+}
+
 /** App CENC uses native FFmpeg for both senc and saiz/saio layouts. Never log key/args. */
 async function decryptContentKeyFile(input, output, contentKey, { signal, cancelToken, cleanupOutput = () => fsp.unlink(output) } = {}) {
   if (typeof contentKey !== 'string' || !/^[a-f\d]{32}$/i.test(contentKey)) throw new Error('片源解密密钥格式无效');
@@ -5935,6 +6002,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     getCompatDir();
     registerStreamProtocol();
     registerLocalProtocol();
+    registerCoverProtocol();
     const settings = getCurrentSettings();
 
     bossKey.start();
