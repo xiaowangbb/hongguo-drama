@@ -5,7 +5,6 @@ from the pinned reference source archive.
 """
 
 import argparse
-import fcntl
 import json
 import os
 import sys
@@ -26,6 +25,32 @@ from phone_sdk_core_v5 import SdkDigestCore
 from phone_sdk_exchange_v5 import exchange_response
 from phone_sdk_materials_v5 import decode_app_config, read_sdk_image
 from phone_sdk_session_v5 import send_prepared
+
+
+STAGE = "start"
+
+
+def stage(name):
+    global STAGE
+    STAGE = name
+    print(f"[sdk-playback] {name}", file=sys.stderr, flush=True)
+
+
+def windows_cfg_enabled():
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    class Policy(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD)]
+
+    value = Policy()
+    if not ctypes.windll.kernel32.GetProcessMitigationPolicy(
+        ctypes.c_void_p(-1), 7, ctypes.byref(value), ctypes.sizeof(value)
+    ):
+        raise OSError("GetProcessMitigationPolicy failed")
+    return bool(value.Flags & 1)
 
 
 def load_device(cache):
@@ -54,7 +79,8 @@ def save_device(cache, context):
         stream.write(data)
         stream.flush()
         os.fsync(stream.fileno())
-    os.chmod(temporary, 0o600)
+    if os.name != "nt":
+        os.chmod(temporary, 0o600)
     os.replace(temporary, path)
 
 
@@ -69,12 +95,36 @@ def cache_lock(cache):
     path = cache / "init.lock"
     if path.is_symlink():
         raise RuntimeError("invalid cache lock path")
-    with path.open("a+") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    with path.open("a+b") as stream:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(stream.fileno()).st_size == 0:
+                stream.write(b"0")
+                stream.flush()
+            deadline = time.monotonic() + 30.0
+            while True:
+                stream.seek(0)
+                try:
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("SDK cache lock timed out") from None
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def register(cache):
@@ -114,19 +164,27 @@ def register(cache):
     return context
 
 
-def resolve(video, cache):
+def resolve(video, cache, content_type):
+    stage("cache-lock")
     # Parallel downloads may start with an empty cache; initialize its shared
     # device and SDK assets once before independent playback sessions begin.
     with cache_lock(cache):
+        stage("registration")
         context = register(cache)
+        stage("assets")
         assets = load_assets(cache, allow_download=True)
+    stage("materials")
     materials = decode_app_config(assets.configuration)
     image = read_sdk_image(assets.image)
     sdk_core = SdkDigestCore(assets.image)
 
     def core(payload, selector, seconds):
-        return sdk_core.digest(payload, selector, seconds)[0][:16]
+        stage(f"digest-{selector}-start")
+        digest = sdk_core.digest(payload, selector, seconds)[0][:16]
+        stage(f"digest-{selector}-done")
+        return digest
 
+    stage("bootstrap-prepare")
     prepared = prepare_bootstrap(
         context,
         int(time.time() * 1000),
@@ -134,6 +192,7 @@ def resolve(video, cache):
         image=image,
         core=core,
     )
+    stage("bootstrap-send")
     result = exchange_response(
         send_prepared(prepared),
         common=materials.exchange_key,
@@ -141,6 +200,7 @@ def resolve(video, cache):
     )
     ladon = prepared.next_ladon
     if result.status == 202:
+        stage("bootstrap-continue")
         prepared = prepare_bootstrap(
             context,
             int(time.time() * 1000),
@@ -159,19 +219,22 @@ def resolve(video, cache):
     if result.status != 200:
         raise RuntimeError(f"SDK session status {result.status}")
 
+    stage("playback-prepare")
     playback = prepare_playback_v5(
         context,
         video,
         int(time.time() * 1000),
+        content_type=content_type,
         token=result.token,
         previous_ladon=ladon,
         materials=materials,
         image=image,
         core=core,
     )
+    stage("playback-send")
     payload = json.loads(send_prepared(playback))
     data = payload.get("data", {})
-    entries = data.get("1004", data)
+    entries = data.get(content_type, data)
     model = entries.get(video, {}).get("video_model")
     if isinstance(model, str):
         model = json.loads(model)
@@ -184,9 +247,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--video", required=True)
     parser.add_argument("--cache", required=True, type=Path)
+    parser.add_argument("--content-type", default="1004", choices=("1001", "1004"))
     args = parser.parse_args()
     try:
-        model, user_agent = resolve(args.video, args.cache)
+        stage("cfg-check")
+        if windows_cfg_enabled():
+            raise RuntimeError("Windows Control Flow Guard is enabled; rebuild the PyInstaller bootloader with --no-cfg")
+        model, user_agent = resolve(args.video, args.cache, args.content_type)
         print(json.dumps({
             "ok": True,
             "model": model,
@@ -196,6 +263,7 @@ def main():
     except Exception as error:
         print(json.dumps({
             "ok": False,
+            "stage": STAGE,
             "error": f"{type(error).__name__}: {str(error)[:240]}",
         }, separators=(",", ":")))
         return 1
