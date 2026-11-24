@@ -57,7 +57,8 @@ feat(account): 支持读取红果账号官方收藏夹（云端书架）
 | `src/native/app-source.js`             | `signedAccountRequest` 白名单放行收藏接口（只读；增删收藏的 `bookshelf/video/update/v1` **未**放行） |
 | `src/native/account-session.js`        | 新增 `parseFavorites()` 解析器；账号服务新增 `favorites()` 方法                              |
 | `src/native/account-controller.js`     | 新增 `get-account-favorites` / `play-account-favorite` 两个 IPC                    |
-| `src/components/AccountManagement.jsx` | 账号页新增「官方收藏夹」分区                                                                 |
+| `src/components/AccountManagement.jsx` | 账号页新增「官方收藏夹」分区，并与观看记录改为左右两列并排                                       |
+| `src/components/AccountManagement.css` | 两列等宽布局（`minmax(0, 1fr)`）、各自独立滚动、窄列压缩与窄屏单列回退                              |
 | `preload.js`                           | 暴露对应 IPC                                                                       |
 | `src/i18n/en.json`                     | 英译词条                                                                           |
 | `src/native/account-session.test.cjs`  | 新增 4 项解析器测试                                                                    |
@@ -79,10 +80,21 @@ feat(account): 支持读取红果账号官方收藏夹（云端书架）
 
 ### 交互
 
-- 账号页「官方收藏夹」分区与「观看记录」**并列**，两者独立，互不影响。
+- 账号页「官方收藏夹」分区与「观看记录」**左右两列并排**，两者独立，互不影响。
 - 显示剧名、封面、集数、简介与收藏时间，支持按剧名搜索。
 - 点击收藏项会拉取该剧分集并进入播放页；本地没有档案时自动补齐分集列表。
 - 登录成功、退出账号、账号状态变化时同步刷新收藏列表；收藏为空时给出明确提示而不是空白页。
+
+#### 为什么改成两列
+
+首版把收藏夹接在观看记录**下方**，实测后确认体验不好：观看记录最多 50 条，收藏夹被顶到列表末尾，视线要一直往下扫才能找到。
+
+改为并排后：
+
+- 两列**等宽**（`grid-template-columns: repeat(2, minmax(0, 1fr))`）。用 `minmax(0, …)` 而不是默认的 `auto`，长剧名不会把某一列撑宽。
+- 各自**独立滚动**（`max-height: 62vh; overflow-y: auto`），观看记录多长都不影响收藏夹的位置；收藏夹始终在首屏可见。
+- 窄列内做了相应压缩：封面缩略图从 52×70 缩到 44×60，右侧的「继续观看 / 打开」操作文字隐藏（整个条目本身仍可点击），标题与搜索框对齐。
+- 窗口宽度不足 860px 时**自动退回单列**，避免两列都被压到读不清。
 
 ### 只读说明
 
