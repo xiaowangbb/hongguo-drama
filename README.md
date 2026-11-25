@@ -14,6 +14,34 @@
 
 <!-- ▼ INSERT-NEW-ENTRY-HERE：新通报插入在此行正下方，保持最新置顶 -->
 
+### 2026-11-26 · 修复 360P 的真正原因：SDK 播放执行文件未打包
+
+**问题**：红果剧集下载普遍落到 360P，提示「已下载更低质量片源：360P（原选 1080P）」。官方 8.3 同样设置能拿到 1080P。
+
+**根因**：`build/sdk-playback/<arch>/hongguo-sdk-playback` 这个二进制**没有被打进包**。
+
+| 事实 | 说明 |
+|---|---|
+| 该目录被 `.gitignore` 排除 | 只有 `README.txt` 进版本库，二进制需单独构建 |
+| 上游靠 CI 构建 | `.github/workflows/*.yml` 有独立的 SDK 构建步骤与缓存，`build:mac` 里不含这一步 |
+| 本地合并后未构建 | 目录里只剩 README，打包自然带不进去 |
+| 后果 | `sdk` / `app` 两个通道全部失效（`SDK 初始化失败：SDK 运行环境不可用`），取流只能落到官网公开源，也就是 360×640 预览 |
+
+对照官方安装包可确认：`app.asar.unpacked/build/sdk-playback/darwin-arm64/hongguo-sdk-playback` 存在（约 25 MB），我们的包缺失。
+
+**修复**
+
+| 主题 | 修复内容 |
+|---|---|
+| 打包脚本 | `scripts/build-mac-local.sh` 新增 SDK 构建步骤（在 FFmpeg 之后、前端构建之前），已有对应架构产物则跳过 |
+| 验证 | 直接用构建出的二进制取流，成功返回 1080p / 720p / 540p / 480p / 360p 全档位，`1920×1080` 主片源可用 |
+
+**同时更正上一版通报的判断**：此前把 360P 归因为「红果服务端对匿名设备收紧策略」，并在该前提下调整了 `openhongguo` 传输解压与默认源顺序。那两条改动本身没错（`decompress: false` 加 `Content-Encoding: br` 确实会让 SDK 报 `unsupported content encoding`），但**不是 360P 的主因**。主因是 SDK 二进制缺失。默认源顺序保持 `app → sdk → web → openhongguo` 不变。
+
+**本地打包注意**：`build:mac` 不含 SDK 构建，直接跑 `npm run build:mac` 会打出缺 SDK 的包。请用 `bash scripts/build-mac-local.sh`。
+
+---
+
 ### 2026-11-26 · 修复 8.3 取流退化：openhongguo 传输解压 + 默认源顺序
 
 **问题**：合并 8.3 后，红果剧集下载普遍落到 360P，并提示「已下载更低质量片源：360P（原选 1080P）」。

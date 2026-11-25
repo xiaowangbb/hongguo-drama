@@ -27,19 +27,37 @@ echo
 echo "==> 准备媒体工具"
 node scripts/setup-ffmpeg-mac.js $ARCHS || exit 1
 
-# 2. 软件播放器资源（24 个 Wasm）
+# 2. SDK 播放取源执行文件。
+#
+#    这一步不能省：build/sdk-playback/* 被 .gitignore 排除，只有 README 进版本库。
+#    缺了它 sdk / app 两个通道全部失效（SDK 初始化失败：SDK 运行环境不可用），
+#    取流只能落到官网公开源，也就是 360p 预览——表现就是「1080P 却下成 360P」。
+#    已有对应架构的产物就跳过；要强制重建先删 build/sdk-playback/<arch>/。
+echo
+echo "==> 准备 SDK 播放执行文件"
+for a in $ARCHS; do
+  target="build/sdk-playback/darwin-$a/hongguo-sdk-playback"
+  if [ -x "$target" ]; then
+    echo "    darwin-$a 已存在，跳过"
+  else
+    echo "    构建 darwin-$a（PyInstaller，首次约 1-3 分钟）"
+    sh scripts/build-sdk-playback-mac.sh "$a" || exit 1
+  fi
+done
+
+# 3. 软件播放器资源（24 个 Wasm）
 echo
 echo "==> 准备软件播放器资源"
 node scripts/setup-software-player.cjs || exit 1
 
-# 3. 前端构建：必须先清空 dist-react，否则 vite 的 emptyOutDir
+# 4. 前端构建：必须先清空 dist-react，否则 vite 的 emptyOutDir
 #    会连带删掉上一步刚放进去的 software/ 目录。
 echo
 echo "==> 构建前端"
 rm -rf dist-react
 npx vite build || exit 1
 
-# 4. 前端构建完再补回软件播放器资源（vite 已清过目录）
+# 5. 前端构建完再补回软件播放器资源（vite 已清过目录）
 echo
 echo "==> 补齐软件播放器资源到 dist-react/software"
 node scripts/setup-software-player.cjs || exit 1
