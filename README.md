@@ -48,6 +48,12 @@
 | `src/components/__tests__/player-behavior.test.mjs` | mock 正则同时放行两个组件名 |
 | `src/native/app-source.js` | 保留本地更宽的账号接口白名单（比上游多 `bookshelf/video/list/v/`） |
 
+**修复**（合并后暴露的问题）
+
+| 主题 | 修复内容 |
+|---|---|
+| `asarUnpack` 重复键 | 本地与上游各自新增了一个 `asarUnpack` 字段，合并后同一对象里出现两个同名 key，后者会**静默覆盖**前者。若不处理，第三方来源脚本与 `parse5` 不会被打包解包，运行时找不到文件。已合并为单个数组，六项解包规则全部保留 |
+
 `main.js`（本地改动 518 行）、`preload.js`、`src/native/hongguo.js` 等重头文件均自动合并成功，
 第三方来源的 `module:` 分流点（`fetchEpisodeList` / `fetchPlayUrlSingle`）完整保留。
 

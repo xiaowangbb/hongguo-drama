@@ -75,13 +75,11 @@
       "vendor/source-modules/**/*",
       "src/native/module-worker.cjs",
       "node_modules/parse5/**/*",
-      "node_modules/entities/**/*"
-    ],
-    "asar": true,
-    "asarUnpack": [
+      "node_modules/entities/**/*",
       "build/sdk-playback/**/*",
       "build/sdk-playback/win32-x64/**"
     ],
+    "asar": true,
     "artifactName": "hongguo-downloader-8.3-${os}-${arch}.${ext}",
     "win": {
       "target": [
