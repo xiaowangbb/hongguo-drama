@@ -2762,19 +2762,42 @@ function orphanedTemporaryDirectories() {
   const recorded = new Set(downloadTasks.flatMap(task => taskTemporaryRecords(task).map(record => record?.directory)));
   const roots = new Set(downloadTasks.map(task => task.savePath && path.dirname(task.savePath)).filter(Boolean));
   // 任务记录被清空后，磁盘上的孤儿目录就没有任务可以指路了；
-  // 因此额外扫描下载根目录下的剧集目录，不能只依赖任务记录。
+  // 因此额外扫描下载根目录下的来源目录，不能只依赖任务记录。
   const settings = getCurrentSettings();
   const root = (settings.root && String(settings.root).trim()) ? String(settings.root).trim() : app.getPath('downloads');
-  for (const source of ['红果短剧', 'DramaBox', 'ReelShort', '河马短剧', '西饭短剧', '第三方来源']) {
-    roots.add(path.join(root, source));
-  }
+  const sourceNames = new Set(['红果短剧', 'DramaBox', 'ReelShort', '河马短剧', '西饭短剧', '第三方来源']);
   for (const label of new Set(moduleSources.listSources().map(source => sourceFolderName('module:' + source.id)))) {
-    roots.add(path.join(root, label));
+    sourceNames.add(label);
   }
+  // 剧集目录不一定直接挂在根目录下：用户常常先按分类归档，形成
+  // <root>/<分类>/<来源>/<剧名-哈希>/ 这样的层级。只按固定深度扫描会漏掉
+  // 这些目录，表现为「有残留提示、却没有可清理项」。因此改为在根目录下
+  // 递归查找来源目录，深度受限以免在大型媒体库上开销失控。
+  const MAX_DEPTH = 3;
+  const sourceDirs = new Set();
+  const queue = [{ dir: root, depth: 0 }];
+  const visited = new Set();
+  while (queue.length) {
+    const { dir, depth } = queue.shift();
+    if (visited.has(dir) || depth > MAX_DEPTH) continue;
+    visited.add(dir);
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch (_) { continue; }
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      let isDirectory = false;
+      try { isDirectory = fs.statSync(candidate).isDirectory(); } catch (_) { continue; }
+      if (!isDirectory) continue;
+      // 命中来源目录名即视为剧集容器，交给外层按 <剧名>/ 下探。
+      if (sourceNames.has(name)) sourceDirs.add(candidate);
+      else queue.push({ dir: candidate, depth: depth + 1 });
+    }
+  }
+  for (const directory of roots) sourceDirs.add(directory);
   const found = [];
   const seen = new Set();
-  // 剧集目录层级固定为 <root>/<来源>/<剧名-哈希>/，只下探到这一层即可。
-  for (const base of roots) {
+  // 剧集目录层级为 <来源>/<剧名-哈希>/，来源目录已在上一步定位。
+  for (const base of sourceDirs) {
     let seriesDirs = [];
     try {
       for (const name of fs.readdirSync(base)) {
