@@ -3,16 +3,57 @@
      每条必须写清：与主干的不同、新增功能、修复。
      禁止写入验证数据、测试结果、本地产物路径或安装包文件名等本地敏感信息。
      新条目统一插入在下方 INSERT 锚点的正下方。
-     基线：上游 jackotom/hongguo-drama 的 main = 7a95e93（8.2 / 8.2.0）。 -->
+     基线：上游 jackotom/hongguo-drama 的 main = 0431675（8.3 / 8.3.0）。 -->
 
 ## 更新通报 · 本地定制版（相对上游 main）
 
 > **通报规则**：与上游 README 一样，每次更新把通报放在最上边；最新的排最上面，旧的往下排。
 > **内容边界**：只写与主干的差异、新增功能与修复，不写验证数据、本地产物路径、安装包文件名等本地敏感信息。
-> **当前基线**：上游 `jackotom/hongguo-drama` `main` = `7a95e93`（8.2 / `8.2.0`）；本地分支 `merge/7.9-smb-sources`，相对基线共 **22 个定制提交**（含 v7.9、v8.2 两次上游合并）。所有上游提交均保留，可继续合并上游更新。
+> **当前基线**：上游 `jackotom/hongguo-drama` `main` = `0431675`（8.3 / `8.3.0`）；本地分支 `merge/7.9-smb-sources`，相对基线共 **39 个定制提交**（含 v7.9、v8.2、v8.3 三次上游合并）。所有上游提交均保留，可继续合并上游更新。
 > **本 fork**：`https://github.com/xiaowangbb/hongguo-drama`
 
 <!-- ▼ INSERT-NEW-ENTRY-HERE：新通报插入在此行正下方，保持最新置顶 -->
+
+### 2026-11-25 · 同步上游 8.3：签名取源策略、播放源排序、openhongguo 源
+
+**与主干的不同**：本次是**纯上游同步**，本地定制代码全部保留，不做削减。上游从 `7a95e93`（8.2）前进到 `0431675`（8.3），共 27 个提交。
+
+**新增功能**（来自上游）
+
+| 能力 | 说明 |
+|---|---|
+| 签名热更新取源策略 | `source-packs/` 下的签名包 + `source-pack.js` / `source-policy.js`，支持声明式配置取源并热更新；只允许声明式官方请求配置，不执行任意代码 |
+| 播放源优先级排序 | `source-order.js`，可在设置里调整 `openhongguo` / `sdk` / `app` / `web` 的先后顺序，取流按此顺序尝试 |
+| openhongguo 来源 | 新增可选来源，走 `openhongguo-source.js`；默认开启，匿名受限时自动降级 |
+| 官方收藏夹 | 读取红果账号云端收藏（PR #194 已进主干）。本地此前已独立实现同一功能，合并后两套实现未产生冲突，功能保持一致 |
+| 来源设置卡片 | 设置页新增「动态取源」卡片，可开关与手动检查更新 |
+
+**修复**（来自上游）
+
+| 主题 | 修复内容 |
+|---|---|
+| 空结果熔断 | 连续返回空的 V8 取源会短路，避免反复空转 |
+| 匿名限流 | 默认走 openhongguo，并给匿名请求加冷却，减少被限流 |
+| 清晰度选择 | 优先使用显式指定的清晰度，不再被自动降级覆盖 |
+| 传输加固 | openhongguo 的传输与流选择加固 |
+
+**合并冲突处理**
+
+本次合并共 5 处冲突，性质都是「两边各加一项」，没有功能取舍：
+
+| 文件 | 处理 |
+|---|---|
+| `package.json` / `package-lock.json` | 本地的 `parse5` 与上游的 `openhongguo` 都保留 |
+| `src/components/Settings.jsx` | `ModuleSources` 与 `SourcePackSettings` 两个设置卡片并列 |
+| `src/components/__tests__/player-behavior.test.mjs` | mock 正则同时放行两个组件名 |
+| `src/native/app-source.js` | 保留本地更宽的账号接口白名单（比上游多 `bookshelf/video/list/v/`） |
+
+`main.js`（本地改动 518 行）、`preload.js`、`src/native/hongguo.js` 等重头文件均自动合并成功，
+第三方来源的 `module:` 分流点（`fetchEpisodeList` / `fetchPlayUrlSingle`）完整保留。
+
+**说明**：`vendor/source-modules/` 下 15 个第三方来源脚本是本地纯新增，上游没有对应目录，合并不涉及。
+
+---
 
 ### 2026-11-25 · NAS 容器版：服务端支持第三方来源，与桌面端对齐
 
