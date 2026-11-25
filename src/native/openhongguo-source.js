@@ -2,6 +2,7 @@
 'use strict';
 
 const path = require('node:path');
+const zlib = require('node:zlib');
 const axios = require('axios');
 const { abortError, throwIfAborted } = require('./request-signal');
 const { normalizeDownloadQuality } = require('./download-quality');
@@ -49,12 +50,39 @@ function createLazyClient({
 
 const defaultClient = createLazyClient();
 
+/**
+ * 解压响应体。
+ *
+ * SDK 的 TransportResponse 契约要求「body 是原始字节，不要自动解压」——
+ * 意思是传输层不要依赖 axios 的自动解压（那会在解压后丢掉原始语义），
+ * 但**必须自己把压缩体还原成明文**，否则 SDK 拿到的是压缩字节，
+ * 它的 WASM 只认 gzip/deflate，遇到 br 就直接报
+ * "transport failure: unsupported content encoding"。
+ */
+function decodeBody(body, encoding) {
+  if (!body || !body.length) return body;
+  const kind = String(encoding || '').toLowerCase().trim();
+  try {
+    if (kind === 'br') return zlib.brotliDecompressSync(body);
+    if (kind === 'gzip' || kind === 'x-gzip') return zlib.gunzipSync(body);
+    if (kind === 'deflate') return zlib.inflateSync(body);
+    if (kind === 'zstd' && typeof zlib.zstdDecompressSync === 'function') return zlib.zstdDecompressSync(body);
+  } catch {
+    // 解压失败时原样返回，让 SDK 以自己的方式报错，避免掩盖真实原因。
+    return body;
+  }
+  return body;
+}
+
 function axiosTransport({ request = axios, timeout = 15000 } = {}) {
   return async req => {
+    const originalHeaders = req.headers || {};
     const response = await request({
       method: req.method || 'GET',
       url: req.url,
-      headers: req.headers,
+      // 明确只要 gzip/deflate：服务端默认会回 br，而我们的解压路径
+      // 与 SDK 的能力都以这两者为准。保留调用方自己的头。
+      headers: { ...originalHeaders, 'accept-encoding': 'gzip, deflate' },
       ...(req.body?.length ? { data: Buffer.from(req.body) } : {}),
       responseType: 'arraybuffer',
       responseEncoding: null,
@@ -78,11 +106,16 @@ function axiosTransport({ request = axios, timeout = 15000 } = {}) {
         headers[name] = Array.isArray(raw) ? String(raw[0]) : String(raw);
       }
     }
+    // 解压后 content-encoding / content-length 已不适用，必须去掉，
+    // 否则 SDK 会按头再解压一次而失败。
+    const decoded = decodeBody(Buffer.from(response.data || []), headers['content-encoding']);
+    delete headers['content-encoding'];
+    delete headers['content-length'];
     return {
       status: Number(response.status) || 0,
       headers,
       cookies,
-      body: new Uint8Array(Buffer.from(response.data || [])),
+      body: new Uint8Array(decoded),
     };
   };
 }

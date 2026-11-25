@@ -34,14 +34,22 @@ test('openhongguo provider maps compatible streams and uses the highest quality 
   assert.ok(result.candidates.every(item => !/127\.0\.0\.1|bytevc2/.test(item.url)));
 });
 
-test('openhongguo axios transport preserves raw bodies and inherits ambient proxy handling', async () => {
+// 传输层必须把压缩体解压成明文再交给 SDK。
+//
+// SDK 的 TransportResponse 契约写「body 是原始字节，不要自动解压」，指的是
+// 不要依赖 axios 的自动解压（那会改变语义），但压缩体必须由传输层自己还原：
+// 服务端默认回 Content-Encoding: br，而 SDK 的 WASM 只认 gzip/deflate，
+// 直接透传压缩字节会得到 "transport failure: unsupported content encoding"。
+test('openhongguo axios transport decodes compressed bodies before handing them to the SDK', async () => {
+  const zlib = require('node:zlib');
   let config;
+  const plain = Buffer.from('raw-body');
   const transport = axiosTransport({ request: async value => {
     config = value;
     return {
       status: 200,
-      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip', 'set-cookie': ['a=1; Path=/'] },
-      data: Buffer.from('raw-body'),
+      headers: { 'content-type': 'application/json', 'content-encoding': 'br', 'content-length': String(plain.length), 'set-cookie': ['a=1; Path=/'] },
+      data: zlib.brotliCompressSync(plain),
     };
   } });
   const response = await transport({ method: 'POST', url: 'https://api.example/j', headers: { Accept: '*' }, body: new Uint8Array([1, 2, 3]) });
@@ -49,9 +57,27 @@ test('openhongguo axios transport preserves raw bodies and inherits ambient prox
   assert.equal(config.maxContentLength, 8 * 1024 * 1024);
   assert.equal(Object.hasOwn(config, 'proxy'), false, 'ambient app proxy environment must remain in control');
   assert.deepEqual([...config.data], [1, 2, 3]);
+  // 只向服务端要 gzip/deflate，避免再拿回 br
+  assert.equal(config.headers['accept-encoding'], 'gzip, deflate');
+  assert.equal(config.headers.Accept, '*', '调用方的其它请求头要被保留');
   assert.equal(Buffer.from(response.body).toString(), 'raw-body');
-  assert.equal(response.headers['content-encoding'], 'gzip');
+  // 已解压，头必须去掉，否则 SDK 会按头再解一次
+  assert.equal(Object.hasOwn(response.headers, 'content-encoding'), false);
+  assert.equal(Object.hasOwn(response.headers, 'content-length'), false);
   assert.equal(response.cookies.a, '1');
+});
+
+test('openhongguo axios transport decodes gzip and leaves plain bodies untouched', async () => {
+  const zlib = require('node:zlib');
+  const gzip = axiosTransport({ request: async () => ({
+    status: 200, headers: { 'content-encoding': 'gzip' }, data: zlib.gzipSync(Buffer.from('gz-body')),
+  }) });
+  assert.equal(Buffer.from((await gzip({ method: 'GET', url: 'https://a/b', headers: {} })).body).toString(), 'gz-body');
+
+  const plain = axiosTransport({ request: async () => ({
+    status: 200, headers: {}, data: Buffer.from('plain-body'),
+  }) });
+  assert.equal(Buffer.from((await plain({ method: 'GET', url: 'https://a/b', headers: {} })).body).toString(), 'plain-body');
 });
 
 test('explicit quality prefers a stream that meets the target before allowing lower fallback', async () => {

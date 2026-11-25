@@ -14,6 +14,31 @@
 
 <!-- ▼ INSERT-NEW-ENTRY-HERE：新通报插入在此行正下方，保持最新置顶 -->
 
+### 2026-11-26 · 修复 8.3 取流退化：openhongguo 传输解压 + 默认源顺序
+
+**问题**：合并 8.3 后，红果剧集下载普遍落到 360P，并提示「已下载更低质量片源：360P（原选 1080P）」。
+
+**根因**（两条，叠加导致）
+
+| # | 问题 | 说明 |
+|---|---|---|
+| 1 | openhongguo 传输层不解压 | 服务端默认回 `Content-Encoding: br`，而传输层用 `decompress: false` 把压缩字节原样交给 SDK。SDK 的 WASM 只认 gzip/deflate，直接报 `transport failure: unsupported content encoding`，该源必然失败 |
+| 2 | 默认源顺序把 openhongguo 排第一 | 上游 8.3 的默认顺序是 `openhongguo → sdk → app → web`。该源走匿名设备身份，服务端常返回空 body（`ANONYMOUS_LIMITED`），排首位只会先浪费一轮请求 |
+
+两条叠加的结果：所有高清源失败 → 只剩官网公开源（仅 360×640 预览）→ 因 `allowLowerQuality` 在固定清晰度下放行降级 → 静默落成 360P。
+
+**修复**
+
+| 主题 | 修复内容 |
+|---|---|
+| 传输解压 | 传输层显式请求 `accept-encoding: gzip, deflate`，并按响应头用 zlib 还原（br / gzip / deflate / zstd），解压后删除 `content-encoding` 与 `content-length` 头，避免 SDK 二次解压 |
+| 默认源顺序 | 默认改回 `app → sdk → web → openhongguo`，与 8.2 的有效顺序一致；`SOURCE_IDS` 仍保留全部四个源，用户设置不受影响 |
+| 测试 | 更新 `source-order.test.cjs` 与 `openhongguo-source.test.cjs`。原测试断言「保留压缩体与 content-encoding 头」，正是缺陷本身，改为断言解压行为 |
+
+**说明**：`app` 通道在当前网络下仍会返回空响应（`EMPTY_RESPONSE`，HTTP 200 但 body 为 0 字节）。经对照验证，**8.2 基线 `7a95e93` 与纯上游 8.3 的行为完全相同**，属红果服务端对匿名设备的策略收紧，不是合并引入，也不在本地可修范围内。本次修复的作用是把「必然失败的源」从首选位置移开、并修掉传输层缺陷，让取流尽快落到有效通道。
+
+---
+
 ### 2026-11-25 · 同步上游 8.3：签名取源策略、播放源排序、openhongguo 源
 
 **与主干的不同**：本次是**纯上游同步**，本地定制代码全部保留，不做削减。上游从 `7a95e93`（8.2）前进到 `0431675`（8.3），共 27 个提交。
