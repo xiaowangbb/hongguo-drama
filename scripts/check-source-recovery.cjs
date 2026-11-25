@@ -462,17 +462,19 @@ const checks = [
     f.markWebMediaFailure(first); f.state.calls.length = 0;
     const recovered = await f.fetchPlayUrlSingle('11', '1', { force: true });
     assert.equal(recovered.source, 'web', 'five-minute penalty must not hide the only working source');
-    assert.deepEqual(f.state.calls, ['openhongguo', 'sdk', 'app', 'api', 'web']);
+    // 默认顺序以 app/sdk 优先：openhongguo 走匿名身份常失败，不排首位。
+    // app 与 api 同属一条通道（App 接口失败后再试旧接口），因此相邻。
+    assert.deepEqual(f.state.calls, ['app', 'api', 'sdk', 'openhongguo', 'web']);
     f.state.app = true; f.state.calls.length = 0;
     assert.equal((await f.fetchPlayUrlSingle('11', '1', { force: true })).source, 'app');
-    assert.deepEqual(f.state.calls.slice(0, 2), ['openhongguo', 'sdk'], 'the new default is attempted before App');
+    assert.equal(f.state.calls[0], 'app', 'App is attempted first under the default order');
     assert.ok(!f.state.calls.includes('web'), 'web penalty remains after last-resort recovery');
   }],
   ['Unavailable source reports safe per-route reasons without declaring web metadata a global block', async () => {
     const f = routeFixture(); f.state.web = false;
     const unavailable = await f.fetchPlayUrlSingle('11', '1');
     assert.equal(unavailable.code, 'SOURCE_UNAVAILABLE');
-    assert.deepEqual(Array.from(unavailable.sources, item => item.source), ['openhongguo', 'sdk', 'app', 'api', 'web']);
+    assert.deepEqual(Array.from(unavailable.sources, item => item.source), ['app', 'api', 'sdk', 'web', 'openhongguo']);
     assert.doesNotMatch(JSON.stringify(unavailable), /secret|signed\.invalid|private|前.*集|付费|会员/);
     assert.ok(unavailable.sources.every(item => item.code && item.message));
     f.state.app = true;
