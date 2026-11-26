@@ -72,16 +72,25 @@
 }
 
 /* ===== 收藏行：主按钮 + 「查看」按钮 ===== */
-/* 行内用 flex，让主按钮占据剩余宽度，「查看」贴在右侧。 */
-.account-row-with-view {
+/* 行内用 flex，让主按钮占据剩余宽度，「查看」贴在右侧。
+   注意：上面 `.account-history-list button` 会给行内**所有**按钮套上
+   width:100% / display:flex / gap:14px，特异性 (0,1,1)，比单个类名高。
+   所以这里的选择器必须带上 .account-history-list（(0,2,0)）并把
+   width 重置为 auto，否则「查看」也会撑满整行，把主按钮压成一条竖排。 */
+.account-history-list li.account-row-with-view {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.account-row-with-view > button:first-child { flex: 1; min-width: 0; }
+.account-history-list li.account-row-with-view > button:first-child {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
 
-.account-view-button {
-  flex-shrink: 0;
+.account-history-list .account-view-button {
+  flex: 0 0 auto;
+  width: auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -94,16 +103,16 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.account-view-button:hover {
+.account-history-list .account-view-button:hover {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--bg-inset);
 }
-.account-view-button:disabled { opacity: .5; cursor: not-allowed; }
+.account-history-list .account-view-button:disabled { opacity: .5; cursor: not-allowed; }
 /* 窄屏只留图标，避免挤压标题 */
 @media (max-width: 640px) {
-  .account-view-button span { display: none; }
-  .account-view-button { padding: 6px 8px; }
+  .account-history-list .account-view-button span { display: none; }
+  .account-history-list .account-view-button { padding: 6px 8px; }
 }
 
 .account-load-more {
