@@ -13,7 +13,7 @@ const { fixture } = moduleStub.exports;
 (async () => {
   const h = fixture();
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  h.run(source.slice(source.indexOf('async function verifyDownloadQuality('), source.indexOf('function publishDownloadFile(')));
+  h.run(source.slice(source.indexOf('async function verifyDownloadQuality('), source.indexOf('async function publishDownloadFile(')));
   h.run('resolveFfmpeg = () => "/fixture/ffprobe"');
   h.run('verifyDownloadDecode = async () => {}');
 
@@ -34,7 +34,7 @@ const { fixture } = moduleStub.exports;
 
   // 始终无效：重试耗尽后仍按损坏处理
   const h2 = fixture();
-  h2.run(source.slice(source.indexOf('async function verifyDownloadQuality('), source.indexOf('function publishDownloadFile(')));
+  h2.run(source.slice(source.indexOf('async function verifyDownloadQuality('), source.indexOf('async function publishDownloadFile(')));
   h2.run('resolveFfmpeg = () => "/fixture/ffprobe"; verifyDownloadDecode = async () => {}');
   h2.run('probeVideoInfo = async () => null');
   h2.context.file = file;
@@ -48,7 +48,7 @@ const { fixture } = moduleStub.exports;
   const empty = path.join(h.root, 'empty.mp4');
   fs.writeFileSync(empty, Buffer.alloc(0));
   const h3 = fixture();
-  h3.run(source.slice(source.indexOf('async function verifyDownloadQuality('), source.indexOf('function publishDownloadFile(')));
+  h3.run(source.slice(source.indexOf('async function verifyDownloadQuality('), source.indexOf('async function publishDownloadFile(')));
   h3.run('resolveFfmpeg = () => "/fixture/ffprobe"; verifyDownloadDecode = async () => {}');
   h3.context.probeCount = 0;
   h3.run('probeVideoInfo = async () => { probeCount++; return null; }');
