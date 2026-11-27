@@ -19,11 +19,14 @@ function boundedSignal(parent, timeout) {
     if (parent?.aborted) abort();
     else {
         parent?.addEventListener('abort', abort, { once: true });
+        // 不能 unref：超时定时器一旦 unref，事件循环里没有其它活跃句柄时
+        // （请求立即失败、无 socket 保活）它可能永远不触发，表现为请求永不超时。
+        // 泄漏风险由 dispose() 兜住 —— 调用方都在 finally 里调用它。
         timer = setTimeout(() => controller.abort(timeoutReason()), timeout);
-        timer.unref?.();
     }
     return { signal: controller.signal, dispose() {
-        clearTimeout(timer);
+        // 测试沙箱不提供 clearTimeout，用可选调用兼容。
+        globalThis.clearTimeout?.(timer);
         parent?.removeEventListener('abort', abort);
     } };
 }

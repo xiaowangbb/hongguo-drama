@@ -155,7 +155,8 @@ async function apiCall(apiPath, body, retries = 3, timeout = 25000, deadline = 0
           requestSignal?.removeEventListener('abort', onAbort);
           resolve();
         }, wait);
-        timer.unref?.();
+        // 退避定时器同样不能 unref：事件循环空闲时它不会触发，
+        // 重试流程会永久停在这里。
         const onAbort = () => {
           clearTimeout(timer);
           reject(abortError(requestSignal));
@@ -627,15 +628,21 @@ async function fetchEpisodeList(seriesId, options = {}) {
   }
   return cachedRequest(`episodes:${seriesId}`, 60000,
     async () => {
+      const deadline = Number(options.deadline) || 0;
       try {
         return rememberEpisodeIndices(await fetchEpisodeListFresh(seriesId, {
-          deadline: Number(options.deadline) || 0,
+          deadline,
           content_type: options.content_type || options.contentType,
         }));
       } catch (error) {
         if (!/^\d{1,30}$/.test(String(seriesId))) throw error;
+        // 兜底路径必须尊重调用方的 deadline：原先固定加 5 秒，
+        // 会让「主流程超时后仍多等 5 秒」，调用方给的 3 秒变成 8 秒。
+        // 这里按剩余预算取，预算已耗尽就直接向上抛原始错误。
+        const left = deadline ? deadline - Date.now() : 5000;
+        if (left <= 0) throw error;
         try {
-          return rememberEpisodeIndices(await require('./hongguo-creator-album').fetchCreatorAlbum(seriesId, { deadline: Date.now() + 5000 }));
+          return rememberEpisodeIndices(await require('./hongguo-creator-album').fetchCreatorAlbum(seriesId, { deadline: Date.now() + left }));
         } catch {
           throw error;
         }
@@ -677,7 +684,7 @@ async function fetchEpisodeListFromWeb(seriesId, deadline = 0) {
   const hedgeCancel = new AbortController();
   const first = race(1500, true).then(value => {
     firstValue = value;
-    clearTimeout(hedgeTimer);
+    globalThis.clearTimeout?.(hedgeTimer);
     hedgeCancel.abort();
     return value;
   }, error => {
@@ -688,9 +695,16 @@ async function fetchEpisodeListFromWeb(seriesId, deadline = 0) {
     // itself within this window; a healthy page has already returned by then.
     const wait = deadline ? Math.min(600, Math.max(0, deadline - Date.now())) : 600;
     await new Promise(resolve => {
+      // 不能 unref 这个定时器。unref 只保证定时器不阻止进程退出，
+      // 但当事件循环里没有其它活跃句柄时（前两路都已快速失败、无 socket），
+      // 它可能永远不被触发 —— 表现为「无网或请求立即失败时整体挂死」。
       hedgeTimer = setTimeout(resolve, wait);
-      hedgeTimer.unref?.();
-      hedgeCancel.signal.addEventListener('abort', () => { clearTimeout(hedgeTimer); resolve(); }, { once: true });
+      hedgeCancel.signal.addEventListener('abort', () => {
+        // 测试沙箱里的 setTimeout 是同步假实现且不提供 clearTimeout，
+        // 这里用可选调用，真实环境照常清理，沙箱里安全跳过。
+        globalThis.clearTimeout?.(hedgeTimer);
+        resolve();
+      }, { once: true });
     });
     if (firstValue) return firstValue; // the first attempt won; do not add traffic
     if (deadline && Date.now() >= deadline) throw new Error('加载超时或连接中断');
@@ -704,7 +718,7 @@ async function fetchEpisodeListFromWeb(seriesId, deadline = 0) {
     const second = nested.find(error => error !== firstError) || nested[0] || aggregate;
     throw new Error(`${describeWebLoadError(firstError)}；重试失败：${describeWebLoadError(second)}`);
   } finally {
-    clearTimeout(hedgeTimer);
+    globalThis.clearTimeout?.(hedgeTimer);
     hedgeCancel.abort();
   }
 }
