@@ -3,7 +3,6 @@
 
 const os = require('node:os');
 const path = require('node:path');
-const zlib = require('node:zlib');
 const axios = require('axios');
 const { throwIfAborted, withAbort } = require('./request-signal');
 const { normalizeDownloadQuality } = require('./download-quality');
@@ -59,39 +58,17 @@ function createLazyClient({
 
 const defaultClient = createLazyClient();
 
-/**
- * 解压响应体。
- *
- * SDK 的 TransportResponse 契约要求「body 是原始字节，不要自动解压」——
- * 意思是传输层不要依赖 axios 的自动解压（那会在解压后丢掉原始语义），
- * 但**必须自己把压缩体还原成明文**，否则 SDK 拿到的是压缩字节，
- * 它的 WASM 只认 gzip/deflate，遇到 br 就直接报
- * "transport failure: unsupported content encoding"。
- */
-function decodeBody(body, encoding) {
-  if (!body || !body.length) return body;
-  const kind = String(encoding || '').toLowerCase().trim();
-  try {
-    if (kind === 'br') return zlib.brotliDecompressSync(body);
-    if (kind === 'gzip' || kind === 'x-gzip') return zlib.gunzipSync(body);
-    if (kind === 'deflate') return zlib.inflateSync(body);
-    if (kind === 'zstd' && typeof zlib.zstdDecompressSync === 'function') return zlib.zstdDecompressSync(body);
-  } catch {
-    // 解压失败时原样返回，让 SDK 以自己的方式报错，避免掩盖真实原因。
-    return body;
-  }
-  return body;
-}
-
 function axiosTransport({ request = axios, timeout = 15000 } = {}) {
   return async req => {
-    const originalHeaders = req.headers || {};
+    const requestHeaders = { ...(req.headers || {}) };
+    for (const name of Object.keys(requestHeaders)) {
+      if (name.toLowerCase() === 'accept-encoding') delete requestHeaders[name];
+    }
+    requestHeaders['Accept-Encoding'] = 'gzip';
     const response = await request({
       method: req.method || 'GET',
       url: req.url,
-      // 明确只要 gzip/deflate：服务端默认会回 br，而我们的解压路径
-      // 与 SDK 的能力都以这两者为准。保留调用方自己的头。
-      headers: { ...originalHeaders, 'accept-encoding': 'gzip, deflate' },
+      headers: requestHeaders,
       ...(req.body?.length ? { data: Buffer.from(req.body) } : {}),
       ...(req.signal ? { signal: req.signal } : {}),
       responseType: 'arraybuffer',
@@ -122,16 +99,11 @@ function axiosTransport({ request = axios, timeout = 15000 } = {}) {
         headers[name] = Array.isArray(raw) ? String(raw[0]) : String(raw);
       }
     }
-    // 解压后 content-encoding / content-length 已不适用，必须去掉，
-    // 否则 SDK 会按头再解压一次而失败。
-    const decoded = decodeBody(Buffer.from(response.data || []), headers['content-encoding']);
-    delete headers['content-encoding'];
-    delete headers['content-length'];
     return {
       status: Number(response.status) || 0,
       headers,
       cookies,
-      body: new Uint8Array(decoded),
+      body: new Uint8Array(Buffer.from(response.data || [])),
     };
   };
 }
@@ -201,6 +173,16 @@ function candidateFrom(stream, playback, contentKey, vid) {
   }));
 }
 
+function episodeContentType(value, fallback = '1004') {
+  const normalized = String(value ?? '');
+  return ['1001', '1004'].includes(normalized) ? normalized : fallback;
+}
+
+function safeCoverUrl(value) {
+  const url = String(value || '').trim();
+  return /^https?:\/\//i.test(url) ? url : '';
+}
+
 function createOpenhongguoSource({
   getClient = defaultClient,
   now = Date.now,
@@ -259,7 +241,70 @@ function createOpenhongguoSource({
     return { ...candidates[0], candidates };
   }
 
-  return { resolve };
+  async function list(seriesId, options = {}) {
+    throwIfAborted(options.signal);
+    const sid = String(seriesId);
+    if (!/^\d{1,30}$/.test(sid)) throw Object.assign(new Error('红果剧集编号无效'), { code: 'INVALID_OPTIONS' });
+    const client = await withAbort(getClient(), options.signal);
+    let details;
+    try {
+      details = await withAbort(client.getSeriesBatch([sid]), options.signal);
+    } catch (error) {
+      throwIfAborted(options.signal);
+      if (error?.code === 'DEVICE_REJECTED' && typeof client.resetDevice === 'function') {
+        await withAbort(resetDeviceOnce(client), options.signal).catch(() => {});
+        throwIfAborted(options.signal);
+        details = await withAbort(client.getSeriesBatch([sid]), options.signal);
+      } else {
+        throw error;
+      }
+    }
+    const detail = Array.isArray(details) ? details[0] : null;
+    const series = detail?.series;
+    const rows = Array.isArray(detail?.episodes) ? detail.episodes : [];
+    if (String(series?.id || '') !== sid || !rows.length) {
+      throw Object.assign(new Error('openhongguo 未返回完整分集'), { code: 'INVALID_RESPONSE' });
+    }
+    const requestedContentType = episodeContentType(options.content_type || options.contentType, '');
+    const seriesContentType = episodeContentType(series?.content_type, '');
+    const seriesCover = safeCoverUrl(series.cover_url);
+    const episodes = rows.map((item, index) => {
+      const vid = String(item?.id || '');
+      if (!/^\d{1,30}$/.test(vid) || String(item?.series_id || '') !== sid) {
+        throw Object.assign(new Error('openhongguo 分集数据异常'), { code: 'INVALID_RESPONSE' });
+      }
+      const contentType = requestedContentType || episodeContentType(item?.content_type, seriesContentType || '1004');
+      return {
+        vid,
+        vid_index: Number(item.number) > 0 ? Number(item.number) : index + 1,
+        title: item.title || '',
+        series_id: sid,
+        series_title: series.title || '未命名短剧',
+        cover: safeCoverUrl(item.cover_url) || seriesCover,
+        content_type: contentType,
+        web_available: null,
+        locked: item.playable === false,
+      };
+    }).sort((a, b) => a.vid_index - b.vid_index);
+    if (new Set(episodes.map(item => item.vid)).size !== episodes.length
+        || Number(series.episode_count) > episodes.length) {
+      throw Object.assign(new Error('openhongguo 分集列表不完整'), { code: 'INVALID_RESPONSE' });
+    }
+    const topContentType = requestedContentType || seriesContentType || episodes[0]?.content_type || '1004';
+    return {
+      series_id: sid,
+      series_title: series.title || '未命名短剧',
+      cover: seriesCover || (episodes[0] && episodes[0].cover) || '',
+      description: series.description || '',
+      content_type: topContentType,
+      total: episodes.length,
+      web_accessible_episodes: null,
+      episodes,
+      source: 'openhongguo',
+    };
+  }
+
+  return { resolve, list };
 }
 
 const provider = createOpenhongguoSource();
@@ -270,5 +315,6 @@ module.exports = {
   selectStreams,
   candidateFrom,
   createOpenhongguoSource,
+  fetchEpisodeList: (...args) => provider.list(...args),
   fetchPlayUrlSingle: (...args) => provider.resolve(...args),
 };

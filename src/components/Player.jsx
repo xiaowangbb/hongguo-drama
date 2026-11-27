@@ -206,6 +206,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
   const pendingTargetRef = useRef(null);
   const loadedMediaRef = useRef(null);
   const autoCompatAttemptRef = useRef(null);
+  const autoCompatExhaustedRef = useRef(null);
   const reconnectAttemptRef = useRef(null);
   const onlineSourceRef = useRef(null);
   const onlineRecoveryPlayedRef = useRef(null);
@@ -910,9 +911,10 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
 
   /** 转码当前集为 H.264 后播放（解决本机无法解码 HEVC 的黑屏问题） */
   const startCompatPlay = useCallback(
-    async (vidIndex, force = false) => {
+    async (vidIndex, force = false, manual = false) => {
       const ep = episodes.find((e) => e.vid_index === vidIndex);
       if (!ep || ep.locked) return;
+      if (manual) autoCompatExhaustedRef.current = null;
       const request = { requestId: crypto.randomUUID(), seriesId: String(activeSeriesId), vidIndex,
         quality: onlineQualityRef.current?.playbackQuality || (onlineQuality === 'compat' ? 'auto' : onlineQuality), version: mediaVersion.current };
       if (compatRequestRef.current?.version === request.version && compatRequestRef.current?.vidIndex === vidIndex) return;
@@ -938,6 +940,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
           seriesId: activeSeriesId,
           vidIndex,
           vid: ep.vid,
+          contentType: ep.content_type || '',
           quality: request.quality,
           filePath: onlineSourceRef.current === `${activeSeriesId}:${vidIndex}` ? null : ep.savePath || null,
           force,
@@ -987,14 +990,25 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
 
   const tryAutoCompat = useCallback((vidIndex) => {
     if (!autoCompat) return;
+    const episodeKey = `${activeSeriesId}:${vidIndex}`;
+    if (autoCompatExhaustedRef.current === episodeKey) {
+      setDecodeFailed(true);
+      setCompatError('兼容转码后仍无法播放，建议开启“软件解码”或手动切换画质');
+      return;
+    }
     const force = !!compatMap[vidIndex];
     const attempt = autoCompatAttemptRef.current;
     if (attempt?.version === mediaVersion.current && (!force || attempt.force)) {
-      if (stateRef.current.onlineQuality === 'auto') reconnectOnceRef.current();
+      if (attempt.force) autoCompatExhaustedRef.current = episodeKey;
+      if (stateRef.current.onlineQuality === 'auto' && reconnectOnceRef.current()) return;
+      if (attempt.force) {
+        setDecodeFailed(true);
+        setCompatError('兼容转码后仍无法播放，建议开启“软件解码”或手动切换画质');
+      }
       return;
     }
     startCompatPlay(vidIndex, force);
-  }, [autoCompat, compatMap, startCompatPlay]);
+  }, [activeSeriesId, autoCompat, compatMap, startCompatPlay]);
 
   useEffect(() => {
     if (needsCompat && playbackRequested && !playbackError && !onlineProgress) tryAutoCompat(currentIndex);
@@ -1163,6 +1177,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
       prefetchRejectedRef.current = false;
       fallbackAttemptRef.current = null;
       reconnectAttemptRef.current = null;
+      autoCompatExhaustedRef.current = null;
       if (!usableLocal(ep, String(activeSeriesId))) {
         startOnlinePlay(vidIndex, resumeAt, false, autoplay);
         return;
@@ -1192,6 +1207,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
       rejectedLocalRef.current = null;
       fallbackAttemptRef.current = null;
       reconnectAttemptRef.current = null;
+      autoCompatExhaustedRef.current = null;
       resumeLocal(latest, seekTo, autoplay);
       return;
     }
@@ -1203,6 +1219,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
     if (onlineRecovery || keepPlayedOnline || current?.status !== 'completed') {
       fallbackAttemptRef.current = null;
       reconnectAttemptRef.current = null;
+      autoCompatExhaustedRef.current = null;
       startOnlinePlay(currentIndex, currentPosition(), true, autoplay);
     } else goToEpisode(currentIndex, currentPosition(), autoplay);
   };
@@ -1220,6 +1237,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
     try { window.localStorage.setItem('hongguo:online-quality', quality); } catch { showToast('本次清晰度已切换，但未能保存'); }
     fallbackAttemptRef.current = null;
     reconnectAttemptRef.current = null;
+    autoCompatExhaustedRef.current = null;
     setCompatMap({});
     if (playbackRequested && current && !current.locked) startOnlinePlay(currentIndex, seekTo, true, autoplay);
   };
@@ -2127,7 +2145,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
                 <button className="btn btn-primary" onClick={retryUserPlayback}>{t(current?.status === 'completed' ? '重试本集' : '重试本集（在线播放）')}</button>
                 {!mobile && String(detail?.series_id) === String(activeSeriesId) && !fallbackRef.current?.submitting && canChooseLocal(current, String(activeSeriesId)) && <button className="btn btn-outline" onClick={chooseLocalPlayback}>{t("播放已有本地文件")}</button>}
                 {current?.vid && <button className="btn btn-outline" onClick={() => startOnlinePlay(currentIndex, undefined, true)}>{t("重新连接片源")}</button>}
-                {!mobile && current?.vid && !current.locked && (decodeFailed || current?.status === 'completed') && !fallbackRef.current?.submitting && <button className="btn btn-outline" onClick={() => startCompatPlay(currentIndex, true)}>{t("转码后播放")}</button>}
+                {!mobile && current?.vid && !current.locked && (decodeFailed || current?.status === 'completed') && !fallbackRef.current?.submitting && <button className="btn btn-outline" onClick={() => startCompatPlay(currentIndex, true, true)}>{t("转码后播放")}</button>}
               </div></>
             ) : onlineProgress && onlineProgress.vid && (!current || current.vid === onlineProgress.vid) ? (
               <>
@@ -2240,7 +2258,7 @@ function Player({ target, onNavigate, onSeriesSelected, onFloatingChange, active
             <div className="player-placeholder-actions">
               <button className="btn btn-primary" onClick={retryUserPlayback}>{t("重试本集")}</button>
               <button className="btn btn-outline" onClick={() => startOnlinePlay(currentIndex, undefined, true)}>{t("重新连接片源")}</button>
-              {!mobile && <button className="btn btn-outline" onClick={() => startCompatPlay(currentIndex, true)}>
+              {!mobile && <button className="btn btn-outline" onClick={() => startCompatPlay(currentIndex, true, true)}>
                 <Zap size={15} />{t("重新转码后播放")}</button>}
               <button className="btn btn-outline" onClick={() => onNavigate?.('settings')}>{t("播放设置")}</button>
             </div>
